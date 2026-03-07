@@ -1,0 +1,66 @@
+services:
+  # ─── Couchbase ──────────────────────────────────────────────────────────────
+  couchbase:
+    image: couchbase:enterprise-7.6.3
+    container_name: claims-couchbase
+    restart: unless-stopped
+    ports:
+      - "8091:8091"   # Couchbase Web Console
+      - "8092:8092"   # Views / XDCR
+      - "8093:8093"   # Query / N1QL
+      - "8094:8094"   # Search / FTS
+      - "8095:8095"   # Analytics
+      - "8096:8096"   # Eventing
+      - "11210:11210" # KV / SDK
+    volumes:
+      - couchbase-data:/opt/couchbase/var
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "-u", "Administrator:password", "http://localhost:8091/pools/default"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - claims-network
+
+  # ─── API ────────────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: claims-api
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # Server
+      SERVER_PORT: "8080"
+      SERVER_HOST: "0.0.0.0"
+      MAX_BODY_SIZE: "1048576"
+      CORS_ALLOWED_ORIGINS: "*"
+      # Couchbase
+      COUCHBASE_HOST: "couchbase"
+      COUCHBASE_USERNAME: "Administrator"
+      COUCHBASE_PASSWORD: "password"
+      COUCHBASE_BUCKET: "claims"
+      # Logging
+      ENV: "docker"
+    depends_on:
+      couchbase:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - claims-network
+
+volumes:
+  couchbase-data:
+    driver: local
+
+networks:
+  claims-network:
+    driver: bridge
