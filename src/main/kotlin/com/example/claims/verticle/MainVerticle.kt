@@ -2,6 +2,7 @@ package com.example.claims.verticle
 
 import com.example.claims.config.AppConfig
 import com.example.claims.handler.ClaimHandler
+import com.example.claims.handler.ClaimInquiryHandler
 import com.example.claims.repository.ClaimRepository
 import io.vertx.core.http.HttpMethod
 import io.vertx.ext.web.Router
@@ -36,6 +37,7 @@ class MainVerticle : CoroutineVerticle() {
         }
 
         val claimHandler = ClaimHandler(repository, this)
+        val claimInquiryHandler = ClaimInquiryHandler(repository, this)
 
         // ── OpenAPI router ──────────────────────────────────────────────────────
         val routerBuilder = try {
@@ -46,6 +48,7 @@ class MainVerticle : CoroutineVerticle() {
         }
 
         routerBuilder.operation("submitClaim").handler { ctx -> claimHandler.submitClaim(ctx) }
+        routerBuilder.operation("inquireClaim").handler { ctx -> claimInquiryHandler.inquireClaim(ctx) }
         routerBuilder.operation("healthCheck").handler { ctx ->
             val dbStatus = if (repository.isConnected()) "UP" else "DEGRADED"
             ctx.response()
