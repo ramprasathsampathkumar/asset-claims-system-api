@@ -62,7 +62,6 @@ class ClaimRepository(private val config: CouchbaseConfig) {
         val referenceNumber = generateReferenceNumber()
         val now = Instant.now().toString()
 
-        // Hash lastName and optional DOB for inquiry verification — raw PII never stored
         val step2 = document.getJsonObject("step2")
         val lastNameHash = step2?.getString("lastName")?.let { sha256(it) }
         val dobHash = step2?.getString("dateOfBirth")?.let { sha256(it) }
@@ -78,9 +77,9 @@ class ClaimRepository(private val config: CouchbaseConfig) {
             .put("lastNameHash", lastNameHash)
             .put("dobHash", dobHash)
             .put("step1", JsonObject.fromJson(document.getJsonObject("step1").encode()))
+            .put("step2", step2?.let { JsonObject.fromJson(it.encode()) })
             .put("step3", JsonObject.fromJson(document.getJsonObject("step3").encode()))
             .put("step4", JsonObject.fromJson(document.getJsonObject("step4").encode()))
-            // step2 (PII) not stored — only hashes above for inquiry verification
 
         logger.info("Saving claim referenceNumber={} docId={}", referenceNumber, docId)
 
