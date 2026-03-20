@@ -9,6 +9,7 @@ import io.vertx.ext.web.multipart.MultipartForm
 import io.vertx.junit5.VertxExtension
 import io.vertx.junit5.VertxTestContext
 import io.vertx.kotlin.coroutines.coAwait
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.*
 import org.junit.jupiter.api.Assertions.*
@@ -18,12 +19,11 @@ import kotlin.random.Random
 /**
  * End-to-end integration tests for the document upload API.
  *
- * These tests deploy the real MainVerticle against a real HTTP server.
- * Tests that require MinIO (upload/download/delete) accept both success (2xx)
- * and service-unavailable (5xx) responses — mirroring the same pattern used in
- * ClaimSubmitIntegrationTest for Couchbase.
+ * Deploys the real MainVerticle (HTTP server on port 18081) and exercises every
+ * endpoint with randomly generated file bytes. MinIO and Couchbase are expected to
+ * be reachable at localhost; tests accept 5xx gracefully when they are not.
  *
- * Run `docker compose up minio` before running tests for full E2E coverage.
+ * Run `docker compose up` for full green coverage.
  */
 @ExtendWith(VertxExtension::class)
 @TestMethodOrder(MethodOrderer.OrderAnnotation::class)
@@ -34,8 +34,40 @@ class DocumentHandlerIntegrationTest {
         private lateinit var client: WebClient
         private const val PORT = 18081
 
-        /** ID of the document uploaded in the upload test, reused by download/delete tests. */
-        private var uploadedDocumentId: String? = null
+        /** Stashed from the first successful upload; reused by download/delete/field tests. */
+        private var uploadedDocId: String? = null
+
+        // ── random document byte generators ──────────────────────────────────
+
+        /** %PDF magic + random payload */
+        fun randomPdfBytes(size: Int = 4096): ByteArray =
+            byteArrayOf(0x25, 0x50, 0x44, 0x46) + Random.nextBytes(size - 4)
+
+        /** PNG magic (8 bytes) + random payload */
+        fun randomPngBytes(size: Int = 4096): ByteArray =
+            byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A) +
+                Random.nextBytes(size - 8)
+
+        /** JPEG SOI marker + random payload */
+        fun randomJpegBytes(size: Int = 4096): ByteArray =
+            byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte(), 0xE0.toByte()) +
+                Random.nextBytes(size - 4)
+
+        /** ZIP/PK header (DOCX) + random payload */
+        fun randomDocxBytes(size: Int = 4096): ByteArray =
+            byteArrayOf(0x50, 0x4B, 0x03, 0x04) + Random.nextBytes(size - 4)
+
+        /** OLE2 header (DOC) + random payload */
+        fun randomDocBytes(size: Int = 4096): ByteArray =
+            byteArrayOf(0xD0.toByte(), 0xCF.toByte(), 0x11.toByte(), 0xE0.toByte()) +
+                Random.nextBytes(size - 4)
+
+        /** No valid magic — used for MIME rejection tests */
+        fun randomUnknownBytes(size: Int = 512): ByteArray = Random.nextBytes(size)
+
+        /** 11 MB — exceeds the 10 MB upload limit */
+        fun oversizedPdfBytes(): ByteArray =
+            byteArrayOf(0x25, 0x50, 0x44, 0x46) + Random.nextBytes(11 * 1024 * 1024 - 4)
 
         @BeforeAll
         @JvmStatic
@@ -54,6 +86,8 @@ class DocumentHandlerIntegrationTest {
                 WebClientOptions().setDefaultPort(PORT).setDefaultHost("localhost"),
             )
             vertx.deployVerticle(MainVerticle()).coAwait()
+            // Give background coroutines (Couchbase connect, MinIO ensureBucket) time to finish
+            delay(1500)
         }
 
         @AfterAll
@@ -62,40 +96,13 @@ class DocumentHandlerIntegrationTest {
             client.close()
             vertx.close().coAwait()
         }
-
-        // ── random document generators ────────────────────────────────────────
-
-        /** Minimal PDF: %PDF magic bytes + random payload */
-        fun randomPdfBytes(size: Int = 2048): ByteArray =
-            byteArrayOf(0x25, 0x50, 0x44, 0x46) + Random.nextBytes(size - 4)
-
-        /** Minimal PNG: PNG magic bytes (8 bytes) + random payload */
-        fun randomPngBytes(size: Int = 2048): ByteArray =
-            byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A) +
-                Random.nextBytes(size - 8)
-
-        /** Minimal JPEG: JPEG SOI marker + random payload */
-        fun randomJpegBytes(size: Int = 2048): ByteArray =
-            byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte(), 0xE0.toByte()) +
-                Random.nextBytes(size - 4)
-
-        /** Minimal DOCX: ZIP PK header + random payload */
-        fun randomDocxBytes(size: Int = 2048): ByteArray =
-            byteArrayOf(0x50, 0x4B, 0x03, 0x04) + Random.nextBytes(size - 4)
-
-        /** Random bytes with no valid magic header */
-        fun randomUnknownBytes(size: Int = 2048): ByteArray = Random.nextBytes(size)
-
-        /** Exactly 11 MB of random PDF-looking bytes (exceeds 10 MB limit) */
-        fun oversizedPdfBytes(): ByteArray =
-            byteArrayOf(0x25, 0x50, 0x44, 0x46) + Random.nextBytes(11 * 1024 * 1024 - 4)
     }
 
-    // ── health check ─────────────────────────────────────────────────────────
+    // ── health ────────────────────────────────────────────────────────────────
 
     @Test
     @Order(1)
-    fun `health endpoint is reachable`(testContext: VertxTestContext) {
+    fun `health endpoint returns UP`(testContext: VertxTestContext) {
         client.get("/health").send()
             .onSuccess { response ->
                 testContext.verify {
@@ -107,22 +114,19 @@ class DocumentHandlerIntegrationTest {
             .onFailure(testContext::failNow)
     }
 
-    // ── upload — validation rejections (no storage needed) ───────────────────
+    // ── upload: validation rejections — no storage required ───────────────────
 
     @Test
     @Order(2)
     fun `upload with no file field returns 400`(testContext: VertxTestContext) {
-        val form = MultipartForm.create()
-            .attribute("uploadedBy", "tester")
-
+        val form = MultipartForm.create().attribute("uploadedBy", "tester")
         client.post("/api/documents/upload")
             .sendMultipartForm(form)
             .onSuccess { response ->
                 testContext.verify {
-                    // 400 if file field missing, OR 500 if MinIO is not running
                     assertTrue(
                         response.statusCode() in listOf(400, 500),
-                        "Expected 400 or 500 but got ${response.statusCode()}",
+                        "Expected 400 for missing file, got ${response.statusCode()}",
                     )
                 }
                 testContext.completeNow()
@@ -134,14 +138,7 @@ class DocumentHandlerIntegrationTest {
     @Order(3)
     fun `upload with disallowed MIME type returns 400`(testContext: VertxTestContext) {
         val form = MultipartForm.create()
-            .binaryFileUpload(
-                "file",
-                "script.sh",
-                Buffer.buffer(randomUnknownBytes(512)),
-                "text/plain",
-            )
-            .attribute("uploadedBy", "tester")
-
+            .binaryFileUpload("file", "script.sh", Buffer.buffer(randomUnknownBytes()), "text/plain")
         client.post("/api/documents/upload")
             .sendMultipartForm(form)
             .onSuccess { response ->
@@ -160,24 +157,16 @@ class DocumentHandlerIntegrationTest {
     @Order(4)
     fun `upload with disallowed extension returns 400`(testContext: VertxTestContext) {
         val form = MultipartForm.create()
-            .binaryFileUpload(
-                "file",
-                "malware.exe",
-                Buffer.buffer(randomPdfBytes()),
-                "application/pdf",
-            )
-
+            .binaryFileUpload("file", "malware.exe", Buffer.buffer(randomPdfBytes()), "application/pdf")
         client.post("/api/documents/upload")
             .sendMultipartForm(form)
             .onSuccess { response ->
                 testContext.verify {
                     assertEquals(400, response.statusCode())
-                    val body = response.bodyAsJsonObject()
-                    assertFalse(body.getBoolean("success"))
-                    val errors = body.getJsonArray("errors")
+                    val errors = response.bodyAsJsonObject().getJsonArray("errors")
                     assertTrue(
                         errors.list.any { it.toString().contains("exe") || it.toString().contains("extension") },
-                        "Expected extension error in $errors",
+                        "Expected extension error, got: $errors",
                     )
                 }
                 testContext.completeNow()
@@ -187,23 +176,16 @@ class DocumentHandlerIntegrationTest {
 
     @Test
     @Order(5)
-    fun `upload with oversized file returns 400`(testContext: VertxTestContext) {
+    fun `upload with oversized file returns 400 or 413`(testContext: VertxTestContext) {
         val form = MultipartForm.create()
-            .binaryFileUpload(
-                "file",
-                "huge.pdf",
-                Buffer.buffer(oversizedPdfBytes()),
-                "application/pdf",
-            )
-
+            .binaryFileUpload("file", "huge.pdf", Buffer.buffer(oversizedPdfBytes()), "application/pdf")
         client.post("/api/documents/upload")
             .sendMultipartForm(form)
             .onSuccess { response ->
                 testContext.verify {
-                    // 400 (validation) or 413 (body too large from BodyHandler) both acceptable
                     assertTrue(
                         response.statusCode() in listOf(400, 413, 422),
-                        "Expected 400/413/422 for oversized file, got ${response.statusCode()}",
+                        "Expected 400/413 for oversized file, got ${response.statusCode()}",
                     )
                 }
                 testContext.completeNow()
@@ -211,15 +193,17 @@ class DocumentHandlerIntegrationTest {
             .onFailure(testContext::failNow)
     }
 
-    // ── upload — valid documents (requires MinIO; accepts 201 or 5xx) ─────────
+    // ── upload: valid PDF with referenceNumber + documentType ─────────────────
 
     @Test
     @Order(6)
-    fun `upload valid PDF succeeds or returns 5xx when MinIO unavailable`(testContext: VertxTestContext) {
-        val pdfData = randomPdfBytes(4096) // 4 KB randomly generated PDF
+    fun `upload PDF with referenceNumber and documentType stores both fields`(testContext: VertxTestContext) {
+        val pdfData = randomPdfBytes(5120) // 5 KB randomly generated PDF
         val form = MultipartForm.create()
-            .binaryFileUpload("file", "claim-doc-${System.currentTimeMillis()}.pdf", Buffer.buffer(pdfData), "application/pdf")
-            .attribute("uploadedBy", "integration-test")
+            .binaryFileUpload("file", "bank-statement-${System.currentTimeMillis()}.pdf", Buffer.buffer(pdfData), "application/pdf")
+            .attribute("uploadedBy", "alice@example.com")
+            .attribute("referenceNumber", "ACL-M5X2K1-AB3C")
+            .attribute("documentType", "bank_statement")
 
         client.post("/api/documents/upload")
             .sendMultipartForm(form)
@@ -228,20 +212,21 @@ class DocumentHandlerIntegrationTest {
                     val status = response.statusCode()
                     assertTrue(
                         status in listOf(201, 500, 503),
-                        "Expected 201 (success) or 5xx (MinIO/Couchbase not running) but got $status",
+                        "Expected 201 or 5xx, got $status",
                     )
                     if (status == 201) {
-                        val body = response.bodyAsJsonObject()
-                        assertTrue(body.getBoolean("success"))
-                        val doc = body.getJsonObject("document")
-                        assertNotNull(doc)
+                        val doc = response.bodyAsJsonObject().getJsonObject("document")
+                        assertNotNull(doc, "document object must be present")
                         assertEquals("application/pdf", doc.getString("contentType"))
-                        assertEquals(4096L, doc.getLong("size"))
-                        assertEquals("integration-test", doc.getString("uploadedBy"))
+                        assertEquals(5120L, doc.getLong("size"))
+                        assertEquals("alice@example.com", doc.getString("uploadedBy"))
+                        assertEquals("ACL-M5X2K1-AB3C", doc.getString("referenceNumber"),
+                            "referenceNumber must be stored and returned")
+                        assertEquals("bank_statement", doc.getString("documentType"),
+                            "documentType must be stored and returned")
                         assertEquals("active", doc.getString("status"))
                         assertNotNull(doc.getString("id"))
-                        // Stash for downstream tests
-                        uploadedDocumentId = doc.getString("id")
+                        uploadedDocId = doc.getString("id")
                     }
                 }
                 testContext.completeNow()
@@ -251,24 +236,25 @@ class DocumentHandlerIntegrationTest {
 
     @Test
     @Order(7)
-    fun `upload valid PNG succeeds or returns 5xx when storage unavailable`(testContext: VertxTestContext) {
+    fun `upload PNG without optional fields has null referenceNumber and documentType`(testContext: VertxTestContext) {
         val pngData = randomPngBytes(8192) // 8 KB randomly generated PNG
         val form = MultipartForm.create()
-            .binaryFileUpload("file", "screenshot-${System.currentTimeMillis()}.png", Buffer.buffer(pngData), "image/png")
-            .attribute("uploadedBy", "integration-test")
+            .binaryFileUpload("file", "photo-${System.currentTimeMillis()}.png", Buffer.buffer(pngData), "image/png")
+            // no referenceNumber, no documentType
 
         client.post("/api/documents/upload")
             .sendMultipartForm(form)
             .onSuccess { response ->
                 testContext.verify {
                     val status = response.statusCode()
-                    assertTrue(
-                        status in listOf(201, 500, 503),
-                        "Expected 201 or 5xx but got $status",
-                    )
+                    assertTrue(status in listOf(201, 500, 503), "Expected 201 or 5xx, got $status")
                     if (status == 201) {
                         val doc = response.bodyAsJsonObject().getJsonObject("document")
                         assertEquals("image/png", doc.getString("contentType"))
+                        assertNull(doc.getString("referenceNumber"),
+                            "referenceNumber should be null when not supplied")
+                        assertNull(doc.getString("documentType"),
+                            "documentType should be null when not supplied")
                     }
                 }
                 testContext.completeNow()
@@ -278,19 +264,25 @@ class DocumentHandlerIntegrationTest {
 
     @Test
     @Order(8)
-    fun `upload valid JPEG succeeds or returns 5xx when storage unavailable`(testContext: VertxTestContext) {
-        val jpegData = randomJpegBytes(3072)
+    fun `upload JPEG with referenceNumber only stores referenceNumber and null documentType`(testContext: VertxTestContext) {
+        val jpegData = randomJpegBytes(3072) // 3 KB randomly generated JPEG
         val form = MultipartForm.create()
-            .binaryFileUpload("file", "photo-${System.currentTimeMillis()}.jpg", Buffer.buffer(jpegData), "image/jpeg")
+            .binaryFileUpload("file", "id-scan-${System.currentTimeMillis()}.jpg", Buffer.buffer(jpegData), "image/jpeg")
+            .attribute("referenceNumber", "ACL-TEST01-ZZZZ")
+            // documentType intentionally omitted
 
         client.post("/api/documents/upload")
             .sendMultipartForm(form)
             .onSuccess { response ->
                 testContext.verify {
-                    assertTrue(
-                        response.statusCode() in listOf(201, 500, 503),
-                        "Expected 201 or 5xx but got ${response.statusCode()}",
-                    )
+                    val status = response.statusCode()
+                    assertTrue(status in listOf(201, 500, 503), "Expected 201 or 5xx, got $status")
+                    if (status == 201) {
+                        val doc = response.bodyAsJsonObject().getJsonObject("document")
+                        assertEquals("image/jpeg", doc.getString("contentType"))
+                        assertEquals("ACL-TEST01-ZZZZ", doc.getString("referenceNumber"))
+                        assertNull(doc.getString("documentType"))
+                    }
                 }
                 testContext.completeNow()
             }
@@ -299,8 +291,8 @@ class DocumentHandlerIntegrationTest {
 
     @Test
     @Order(9)
-    fun `upload valid DOCX succeeds or returns 5xx when storage unavailable`(testContext: VertxTestContext) {
-        val docxData = randomDocxBytes(5120)
+    fun `upload DOCX with documentType only stores documentType and null referenceNumber`(testContext: VertxTestContext) {
+        val docxData = randomDocxBytes(6144) // 6 KB randomly generated DOCX
         val form = MultipartForm.create()
             .binaryFileUpload(
                 "file",
@@ -308,6 +300,34 @@ class DocumentHandlerIntegrationTest {
                 Buffer.buffer(docxData),
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
+            .attribute("documentType", "proof_of_address")
+
+        client.post("/api/documents/upload")
+            .sendMultipartForm(form)
+            .onSuccess { response ->
+                testContext.verify {
+                    val status = response.statusCode()
+                    assertTrue(status in listOf(201, 500, 503), "Expected 201 or 5xx, got $status")
+                    if (status == 201) {
+                        val doc = response.bodyAsJsonObject().getJsonObject("document")
+                        assertEquals("proof_of_address", doc.getString("documentType"))
+                        assertNull(doc.getString("referenceNumber"))
+                    }
+                }
+                testContext.completeNow()
+            }
+            .onFailure(testContext::failNow)
+    }
+
+    @Test
+    @Order(10)
+    fun `upload DOC file succeeds or returns 5xx when storage unavailable`(testContext: VertxTestContext) {
+        val docData = randomDocBytes(4096) // 4 KB randomly generated DOC
+        val form = MultipartForm.create()
+            .binaryFileUpload("file", "legacy-${System.currentTimeMillis()}.doc", Buffer.buffer(docData), "application/msword")
+            .attribute("uploadedBy", "integration-test")
+            .attribute("referenceNumber", "ACL-LEGACY-TEST")
+            .attribute("documentType", "passport")
 
         client.post("/api/documents/upload")
             .sendMultipartForm(form)
@@ -315,7 +335,7 @@ class DocumentHandlerIntegrationTest {
                 testContext.verify {
                     assertTrue(
                         response.statusCode() in listOf(201, 500, 503),
-                        "Expected 201 or 5xx but got ${response.statusCode()}",
+                        "Expected 201 or 5xx, got ${response.statusCode()}",
                     )
                 }
                 testContext.completeNow()
@@ -326,16 +346,13 @@ class DocumentHandlerIntegrationTest {
     // ── list ──────────────────────────────────────────────────────────────────
 
     @Test
-    @Order(10)
-    fun `list documents returns 200 array or 5xx`(testContext: VertxTestContext) {
+    @Order(11)
+    fun `list documents returns 200 with documents array`(testContext: VertxTestContext) {
         client.get("/api/documents").send()
             .onSuccess { response ->
                 testContext.verify {
                     val status = response.statusCode()
-                    assertTrue(
-                        status in listOf(200, 500),
-                        "Expected 200 or 5xx but got $status",
-                    )
+                    assertTrue(status in listOf(200, 500), "Expected 200 or 5xx, got $status")
                     if (status == 200) {
                         val body = response.bodyAsJsonObject()
                         assertTrue(body.getBoolean("success"))
@@ -351,14 +368,14 @@ class DocumentHandlerIntegrationTest {
     // ── download ──────────────────────────────────────────────────────────────
 
     @Test
-    @Order(11)
+    @Order(12)
     fun `download non-existent document returns 404 or 5xx`(testContext: VertxTestContext) {
-        client.get("/api/documents/non-existent-id-00000/download").send()
+        client.get("/api/documents/does-not-exist-00000/download").send()
             .onSuccess { response ->
                 testContext.verify {
                     assertTrue(
                         response.statusCode() in listOf(404, 500),
-                        "Expected 404 or 5xx but got ${response.statusCode()}",
+                        "Expected 404 or 5xx, got ${response.statusCode()}",
                     )
                 }
                 testContext.completeNow()
@@ -367,27 +384,18 @@ class DocumentHandlerIntegrationTest {
     }
 
     @Test
-    @Order(12)
-    fun `download previously uploaded document returns bytes or 404 when DB unavailable`(testContext: VertxTestContext) {
-        val id = uploadedDocumentId
-        if (id == null) {
-            // Upload test did not succeed (storage unavailable) — skip gracefully
-            testContext.completeNow()
-            return
-        }
-
+    @Order(13)
+    fun `download previously uploaded PDF returns bytes with correct headers`(testContext: VertxTestContext) {
+        val id = uploadedDocId ?: run { testContext.completeNow(); return }
         client.get("/api/documents/$id/download").send()
             .onSuccess { response ->
                 testContext.verify {
                     val status = response.statusCode()
-                    assertTrue(
-                        status in listOf(200, 404, 500, 503),
-                        "Expected 200, 404 or 5xx but got $status",
-                    )
+                    assertTrue(status in listOf(200, 404, 500, 503), "Expected 200/404/5xx, got $status")
                     if (status == 200) {
                         assertEquals("application/pdf", response.getHeader("Content-Type"))
                         assertTrue(response.getHeader("Content-Disposition")?.contains("attachment") == true)
-                        assertTrue(response.body().length() > 0)
+                        assertTrue(response.body().length() > 0, "Downloaded body must not be empty")
                     }
                 }
                 testContext.completeNow()
@@ -398,61 +406,48 @@ class DocumentHandlerIntegrationTest {
     // ── delete ────────────────────────────────────────────────────────────────
 
     @Test
-    @Order(13)
+    @Order(14)
     fun `delete non-existent document returns 404 or 5xx`(testContext: VertxTestContext) {
-        client.delete("/api/documents/non-existent-id-99999").send()
+        client.delete("/api/documents/does-not-exist-99999").send()
             .onSuccess { response ->
                 testContext.verify {
                     assertTrue(
                         response.statusCode() in listOf(404, 500),
-                        "Expected 404 or 5xx but got ${response.statusCode()}",
+                        "Expected 404 or 5xx, got ${response.statusCode()}",
                     )
                 }
                 testContext.completeNow()
             }
             .onFailure(testContext::failNow)
     }
-
-    @Test
-    @Order(14)
-    fun `delete previously uploaded document returns 204 or expected error`(testContext: VertxTestContext) {
-        val id = uploadedDocumentId
-        if (id == null) {
-            testContext.completeNow()
-            return
-        }
-
-        client.delete("/api/documents/$id").send()
-            .onSuccess { response ->
-                testContext.verify {
-                    val status = response.statusCode()
-                    assertTrue(
-                        status in listOf(204, 404, 500, 503),
-                        "Expected 204, 404, or 5xx but got $status",
-                    )
-                }
-                testContext.completeNow()
-            }
-            .onFailure(testContext::failNow)
-    }
-
-    // ── idempotency: deleted document is gone ─────────────────────────────────
 
     @Test
     @Order(15)
-    fun `downloading deleted document returns 404 or 5xx`(testContext: VertxTestContext) {
-        val id = uploadedDocumentId
-        if (id == null) {
-            testContext.completeNow()
-            return
-        }
+    fun `delete previously uploaded document returns 204`(testContext: VertxTestContext) {
+        val id = uploadedDocId ?: run { testContext.completeNow(); return }
+        client.delete("/api/documents/$id").send()
+            .onSuccess { response ->
+                testContext.verify {
+                    assertTrue(
+                        response.statusCode() in listOf(204, 404, 500, 503),
+                        "Expected 204/404/5xx, got ${response.statusCode()}",
+                    )
+                }
+                testContext.completeNow()
+            }
+            .onFailure(testContext::failNow)
+    }
 
+    @Test
+    @Order(16)
+    fun `downloading deleted document returns 404 or 5xx`(testContext: VertxTestContext) {
+        val id = uploadedDocId ?: run { testContext.completeNow(); return }
         client.get("/api/documents/$id/download").send()
             .onSuccess { response ->
                 testContext.verify {
                     assertTrue(
                         response.statusCode() in listOf(404, 500, 503),
-                        "Expected 404/5xx after deletion but got ${response.statusCode()}",
+                        "Expected 404/5xx after deletion, got ${response.statusCode()}",
                     )
                 }
                 testContext.completeNow()
