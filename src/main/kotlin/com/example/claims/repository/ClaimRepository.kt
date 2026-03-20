@@ -105,6 +105,7 @@ class ClaimRepository(private val config: CouchbaseConfig) {
             SELECT META().id, c.*
             FROM `${config.bucket}` c
             WHERE c.referenceNumber = ${'$'}ref
+              AND c.lastNameHash IS NOT MISSING
             LIMIT 1
         """.trimIndent()
 
@@ -141,6 +142,7 @@ class ClaimRepository(private val config: CouchbaseConfig) {
             SELECT META().id, c.*
             FROM `${config.bucket}` c
             WHERE c.referenceNumber = ${'$'}ref
+              AND c.lastNameHash IS NOT MISSING
             LIMIT 1
         """.trimIndent()
 
