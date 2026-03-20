@@ -98,6 +98,33 @@ class DocumentRepository(private val config: CouchbaseConfig) {
         }
     }
 
+    suspend fun findByReferenceNumber(referenceNumber: String): List<DocumentMetadata> = withContext(Dispatchers.IO) {
+        val c = cluster ?: throw IllegalStateException("DocumentRepository not connected")
+
+        val queryStr = """
+            SELECT META().id AS _id, d.*
+            FROM `${config.bucket}` d
+            WHERE d.type = ${'$'}docType
+              AND d.referenceNumber = ${'$'}ref
+            ORDER BY d.uploadedAt DESC
+        """.trimIndent()
+
+        val result = c.query(
+            queryStr,
+            QueryOptions.queryOptions()
+                .parameters(
+                    CouchbaseJsonObject.create()
+                        .put("docType", "document")
+                        .put("ref", referenceNumber),
+                )
+                .timeout(Duration.ofSeconds(10)),
+        )
+
+        result.rowsAsObject().mapNotNull { row ->
+            runCatching { VertxJsonObject(row.toString()).toDocumentMetadata() }.getOrNull()
+        }
+    }
+
     suspend fun findAll(): List<DocumentMetadata> = withContext(Dispatchers.IO) {
         val c = cluster ?: throw IllegalStateException("DocumentRepository not connected")
 

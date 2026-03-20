@@ -1,5 +1,7 @@
 package com.example.claims.handler
 
+import com.example.claims.repository.ClaimRepository
+import com.example.claims.repository.DocumentRepository
 import com.example.claims.service.DocumentService
 import com.example.claims.service.DocumentValidationException
 import io.vertx.core.buffer.Buffer
@@ -12,6 +14,8 @@ import org.slf4j.LoggerFactory
 
 class DocumentHandler(
     private val service: DocumentService,
+    private val claimRepository: ClaimRepository,
+    private val documentRepository: DocumentRepository,
     private val scope: CoroutineScope,
 ) {
 
@@ -80,6 +84,60 @@ class DocumentHandler(
                     .end("""{"success":true,"documents":[$docsJson],"total":${documents.size}}""")
             } catch (e: Exception) {
                 logger.error("Unexpected error listing documents", e)
+                respond500(ctx)
+            }
+        }
+    }
+
+    // POST /api/documents/by-claim
+    // Verifies identity (referenceNumber + lastName, same as /api/inquiry) then returns
+    // only documents tagged with that referenceNumber.
+    fun listByClaim(ctx: RoutingContext) {
+        scope.launch(ctx.vertx().dispatcher()) {
+            try {
+                val body = ctx.body().asJsonObject() ?: run {
+                    respond400(ctx, "Request body is required.")
+                    return@launch
+                }
+
+                val referenceNumber = body.getString("referenceNumber")?.trim()
+                val lastName = body.getString("lastName")?.trim()
+
+                if (referenceNumber.isNullOrBlank()) {
+                    respond400(ctx, "referenceNumber is required.")
+                    return@launch
+                }
+                if (lastName.isNullOrBlank()) {
+                    respond400(ctx, "lastName is required.")
+                    return@launch
+                }
+
+                if (!claimRepository.isConnected()) {
+                    logger.error("Couchbase not connected — cannot verify claim")
+                    respond500(ctx)
+                    return@launch
+                }
+
+                val dateOfBirth = body.getString("dateOfBirth")
+                val claim = claimRepository.findByReferenceAndLastName(referenceNumber, lastName, dateOfBirth)
+
+                if (claim == null) {
+                    logger.info("Document list by claim: not found or identity mismatch referenceNumber={}", referenceNumber)
+                    respond404(ctx, "Claim not found. Please check your reference number and last name.")
+                    return@launch
+                }
+
+                val documents = documentRepository.findByReferenceNumber(referenceNumber)
+                logger.info("Document list by claim: found {} document(s) referenceNumber={}", documents.size, referenceNumber)
+
+                val docsJson = documents.joinToString(",") { it.toJson() }
+                ctx.response()
+                    .setStatusCode(200)
+                    .putHeader("Content-Type", "application/json")
+                    .end("""{"success":true,"referenceNumber":"${esc(referenceNumber)}","documents":[$docsJson],"total":${documents.size}}""")
+
+            } catch (e: Exception) {
+                logger.error("Unexpected error listing documents by claim", e)
                 respond500(ctx)
             }
         }

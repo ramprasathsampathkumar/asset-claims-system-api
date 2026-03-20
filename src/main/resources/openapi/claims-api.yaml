@@ -61,6 +61,47 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /api/documents/by-claim:
+    post:
+      tags: [Documents]
+      summary: List documents for a specific claim (identity-verified)
+      description: |
+        Verifies identity using referenceNumber + lastName (same as /api/inquiry),
+        then returns only documents linked to that claim reference number.
+        Returns 404 if the claim is not found or the lastName does not match.
+      operationId: listClaimDocuments
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClaimDocumentRequest"
+      responses:
+        "200":
+          description: Documents belonging to the verified claim
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaimDocumentListResponse"
+        "400":
+          description: Missing required fields
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Claim not found or identity verification failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /api/documents:
     get:
       tags: [Documents]
@@ -774,6 +815,39 @@ components:
       properties:
         success:
           type: boolean
+        documents:
+          type: array
+          items:
+            $ref: "#/components/schemas/DocumentMetadata"
+        total:
+          type: integer
+
+    ClaimDocumentRequest:
+      type: object
+      required: [referenceNumber, lastName]
+      properties:
+        referenceNumber:
+          type: string
+          description: Claim reference number (format ACL-XXXXXX-XXXX)
+          example: "ACL-TC6BUB-1CF5"
+        lastName:
+          type: string
+          description: Last name of the claimant as submitted
+          example: "Smith"
+        dateOfBirth:
+          type: string
+          description: Optional date of birth for extra identity verification (YYYY-MM-DD)
+          example: "1980-05-15"
+
+    ClaimDocumentListResponse:
+      type: object
+      required: [success, referenceNumber, documents, total]
+      properties:
+        success:
+          type: boolean
+        referenceNumber:
+          type: string
+          example: "ACL-TC6BUB-1CF5"
         documents:
           type: array
           items:

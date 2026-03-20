@@ -61,7 +61,7 @@ class MainVerticle : CoroutineVerticle() {
         val claimHandler = ClaimHandler(claimRepository, this)
         val claimInquiryHandler = ClaimInquiryHandler(claimRepository, this)
         val documentService = DocumentService(storageService, documentRepository)
-        val documentHandler = DocumentHandler(documentService, this)
+        val documentHandler = DocumentHandler(documentService, claimRepository, documentRepository, this)
 
         // ── OpenAPI router ──────────────────────────────────────────────────────
         val routerBuilder = try {
@@ -75,6 +75,7 @@ class MainVerticle : CoroutineVerticle() {
         routerBuilder.operation("inquireClaim").handler { ctx -> claimInquiryHandler.inquireClaim(ctx) }
         routerBuilder.operation("uploadDocument").handler { ctx -> documentHandler.upload(ctx) }
         routerBuilder.operation("listDocuments").handler { ctx -> documentHandler.list(ctx) }
+        routerBuilder.operation("listClaimDocuments").handler { ctx -> documentHandler.listByClaim(ctx) }
         routerBuilder.operation("downloadDocument").handler { ctx -> documentHandler.download(ctx) }
         routerBuilder.operation("deleteDocument").handler { ctx -> documentHandler.delete(ctx) }
         routerBuilder.operation("healthCheck").handler { ctx ->
