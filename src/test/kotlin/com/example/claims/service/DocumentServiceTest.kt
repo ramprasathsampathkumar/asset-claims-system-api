@@ -331,6 +331,8 @@ class DocumentServiceTest {
             uploadedBy = "tester",
             uploadedAt = "2026-03-19T10:00:00Z",
             status = "active",
+            referenceNumber = null,
+            documentType = null,
         )
 
         @Test
@@ -379,6 +381,7 @@ class DocumentServiceTest {
                 id = "del-1", originalFileName = "f.pdf", contentType = "application/pdf",
                 size = 100L, storageBucket = "documents", storageKey = "k/del-1-f.pdf",
                 uploadedBy = "u", uploadedAt = "2026-03-19T10:00:00Z", status = "active",
+                referenceNumber = null, documentType = null,
             )
             coEvery { repository.findById("del-1") } returns meta
             coEvery { storage.deleteObject(any()) } returns Unit
@@ -395,6 +398,7 @@ class DocumentServiceTest {
                 id = "del-2", originalFileName = "f.pdf", contentType = "application/pdf",
                 size = 100L, storageBucket = "documents", storageKey = "k/del-2-f.pdf",
                 uploadedBy = "u", uploadedAt = "2026-03-19T10:00:00Z", status = "active",
+                referenceNumber = null, documentType = null,
             )
             coEvery { repository.findById("del-2") } returns meta
             coEvery { storage.deleteObject(any()) } throws StorageNotFoundException("k/del-2-f.pdf")

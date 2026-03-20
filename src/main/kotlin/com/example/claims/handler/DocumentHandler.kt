@@ -31,6 +31,8 @@ class DocumentHandler(
                 val originalFileName = fileUpload.fileName()?.takeIf { it.isNotBlank() } ?: "upload"
                 val claimedContentType = fileUpload.contentType() ?: "application/octet-stream"
                 val uploadedBy = ctx.request().getFormAttribute("uploadedBy") ?: "anonymous"
+                val referenceNumber = ctx.request().getFormAttribute("referenceNumber")
+                val documentType = ctx.request().getFormAttribute("documentType")
                 val tempPath = fileUpload.uploadedFileName()
 
                 // Read file bytes from the temp upload path
@@ -41,7 +43,10 @@ class DocumentHandler(
                 ctx.vertx().fileSystem().delete(tempPath)
                     .onFailure { logger.warn("Could not delete temp file {}: {}", tempPath, it.message) }
 
-                val metadata = service.upload(originalFileName, claimedContentType, data, uploadedBy)
+                val metadata = service.upload(
+                    originalFileName, claimedContentType, data, uploadedBy,
+                    referenceNumber, documentType,
+                )
                 logger.info("Document uploaded id={} fileName={}", metadata.id, metadata.originalFileName)
 
                 ctx.response()

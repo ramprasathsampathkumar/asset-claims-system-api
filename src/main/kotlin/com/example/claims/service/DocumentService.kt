@@ -35,6 +35,8 @@ class DocumentService(
 
     /**
      * Validate, store, and record metadata for a new document upload.
+     * @param referenceNumber optional claim reference (e.g. ACL-XXXXX-XXXX) for traceability
+     * @param documentType    optional UI-supplied label (e.g. "passport", "bank_statement")
      * @throws DocumentValidationException if the file fails any validation rule
      */
     suspend fun upload(
@@ -42,6 +44,8 @@ class DocumentService(
         claimedContentType: String,
         data: ByteArray,
         uploadedBy: String,
+        referenceNumber: String? = null,
+        documentType: String? = null,
     ): DocumentMetadata {
         val errors = validate(originalFileName, claimedContentType, data)
         if (errors.isNotEmpty()) throw DocumentValidationException(errors)
@@ -53,7 +57,7 @@ class DocumentService(
         val storageKey = "$date/$id-$sanitizedName"
 
         storage.putObject(storageKey, data, detectedType)
-        logger.info("Uploaded file to storage key={} size={}", storageKey, data.size)
+        logger.info("Uploaded file to storage key={} size={} referenceNumber={}", storageKey, data.size, referenceNumber)
 
         val metadata = DocumentMetadata(
             id = id,
@@ -65,6 +69,8 @@ class DocumentService(
             uploadedBy = uploadedBy.ifBlank { "anonymous" },
             uploadedAt = Instant.now().toString(),
             status = "active",
+            referenceNumber = referenceNumber?.takeIf { it.isNotBlank() },
+            documentType = documentType?.takeIf { it.isNotBlank() },
         )
 
         repository.save(metadata)

@@ -10,16 +10,13 @@ data class DocumentMetadata(
     val uploadedBy: String,
     val uploadedAt: String,
     val status: String,
+    val referenceNumber: String?,  // links document to a submitted claim
+    val documentType: String?,     // e.g. "passport", "bank_statement" — UI-supplied label
 ) {
     fun toJson(): String {
-        val safeFileName = esc(originalFileName)
-        val safeContentType = esc(contentType)
-        val safeBucket = esc(storageBucket)
-        val safeKey = esc(storageKey)
-        val safeUploadedBy = esc(uploadedBy)
-        val safeUploadedAt = esc(uploadedAt)
-        val safeStatus = esc(status)
-        return """{"id":"${esc(id)}","originalFileName":"$safeFileName","contentType":"$safeContentType","size":$size,"storageBucket":"$safeBucket","storageKey":"$safeKey","uploadedBy":"$safeUploadedBy","uploadedAt":"$safeUploadedAt","status":"$safeStatus"}"""
+        val refJson = if (referenceNumber != null) """"referenceNumber":"${esc(referenceNumber)}"""" else """"referenceNumber":null"""
+        val docTypeJson = if (documentType != null) """"documentType":"${esc(documentType)}"""" else """"documentType":null"""
+        return """{"id":"${esc(id)}","originalFileName":"${esc(originalFileName)}","contentType":"${esc(contentType)}","size":$size,"storageBucket":"${esc(storageBucket)}","storageKey":"${esc(storageKey)}","uploadedBy":"${esc(uploadedBy)}","uploadedAt":"${esc(uploadedAt)}","status":"${esc(status)}",$refJson,$docTypeJson}"""
     }
 
     private fun esc(s: String) = s.replace("\\", "\\\\").replace("\"", "\\\"")

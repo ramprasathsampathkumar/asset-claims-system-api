@@ -32,7 +32,15 @@ paths:
                   description: The file to upload (binary)
                 uploadedBy:
                   type: string
-                  description: Optional identifier of the uploader
+                  description: Optional identifier of the uploader (e.g. user ID or email)
+                referenceNumber:
+                  type: string
+                  description: Optional claim reference number for traceability (e.g. ACL-XXXXX-XXXX)
+                  example: "ACL-M5X2K1-AB3C"
+                documentType:
+                  type: string
+                  description: Optional UI-supplied document label (e.g. passport, bank_statement, proof_of_address)
+                  example: "bank_statement"
       responses:
         "201":
           description: Document uploaded successfully
@@ -740,6 +748,16 @@ components:
         status:
           type: string
           example: "active"
+        referenceNumber:
+          type: string
+          nullable: true
+          description: Claim reference number this document belongs to, if provided at upload
+          example: "ACL-M5X2K1-AB3C"
+        documentType:
+          type: string
+          nullable: true
+          description: UI-supplied document label (e.g. passport, bank_statement)
+          example: "bank_statement"
 
     DocumentUploadResponse:
       type: object

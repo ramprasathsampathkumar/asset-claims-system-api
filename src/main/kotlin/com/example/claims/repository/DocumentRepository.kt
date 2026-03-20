@@ -71,6 +71,8 @@ class DocumentRepository(private val config: CouchbaseConfig) {
             .put("uploadedBy", metadata.uploadedBy)
             .put("uploadedAt", metadata.uploadedAt)
             .put("status", metadata.status)
+            .put("referenceNumber", metadata.referenceNumber)
+            .put("documentType", metadata.documentType)
 
         val collection = c.bucket(config.bucket).also { it.waitUntilReady(Duration.ofSeconds(10)) }
             .defaultCollection()
@@ -146,5 +148,7 @@ class DocumentRepository(private val config: CouchbaseConfig) {
         uploadedBy = getString("uploadedBy") ?: "anonymous",
         uploadedAt = getString("uploadedAt") ?: "",
         status = getString("status") ?: "active",
+        referenceNumber = getString("referenceNumber"),
+        documentType = getString("documentType"),
     )
 }
