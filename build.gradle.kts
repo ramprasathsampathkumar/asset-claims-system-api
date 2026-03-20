@@ -25,6 +25,7 @@ val couchbaseVersion = "3.7.3"
 val jacksonVersion = "2.18.2"
 val logbackVersion = "1.5.12"
 val coroutinesVersion = "1.9.0"
+val awsSdkVersion = "2.26.31"
 
 dependencies {
     // Vert.x core
@@ -48,6 +49,11 @@ dependencies {
     // Jackson
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin:$jacksonVersion")
     implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310:$jacksonVersion")
+
+    // AWS SDK v2 – S3-compatible storage (MinIO in dev, real S3 in prod)
+    implementation(platform("software.amazon.awssdk:bom:$awsSdkVersion"))
+    implementation("software.amazon.awssdk:s3")
+    implementation("software.amazon.awssdk:url-connection-client")
 
     // Logging
     implementation("ch.qos.logback:logback-classic:$logbackVersion")

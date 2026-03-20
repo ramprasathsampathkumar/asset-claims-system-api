@@ -3,7 +3,11 @@ package com.example.claims.verticle
 import com.example.claims.config.AppConfig
 import com.example.claims.handler.ClaimHandler
 import com.example.claims.handler.ClaimInquiryHandler
+import com.example.claims.handler.DocumentHandler
 import com.example.claims.repository.ClaimRepository
+import com.example.claims.repository.DocumentRepository
+import com.example.claims.service.DocumentService
+import com.example.claims.storage.S3StorageService
 import io.vertx.core.http.HttpMethod
 import io.vertx.ext.web.Router
 import io.vertx.ext.web.handler.BodyHandler
@@ -19,25 +23,45 @@ import java.time.Instant
 class MainVerticle : CoroutineVerticle() {
 
     private val logger = LoggerFactory.getLogger(MainVerticle::class.java)
-    private lateinit var repository: ClaimRepository
+    private lateinit var claimRepository: ClaimRepository
+    private lateinit var documentRepository: DocumentRepository
+    private lateinit var storageService: S3StorageService
     private lateinit var appConfig: AppConfig
 
     override suspend fun start() {
         appConfig = AppConfig.fromEnvironment()
-        repository = ClaimRepository(appConfig.couchbase)
+        claimRepository = ClaimRepository(appConfig.couchbase)
+        documentRepository = DocumentRepository(appConfig.couchbase)
+        storageService = S3StorageService(appConfig.s3)
 
-        // Connect to Couchbase in the background — never on the event loop.
-        // The HTTP server starts regardless; claims will fail gracefully until DB is ready.
+        // Connect to Couchbase and storage in the background — HTTP server starts immediately.
+        // Operations fail gracefully until backends are ready.
         launch {
             try {
-                repository.connect()   // suspend fun — runs on Dispatchers.IO internally
+                claimRepository.connect()
             } catch (e: Exception) {
-                logger.warn("Couchbase unavailable at startup — will retry on first request: {}", e.message)
+                logger.warn("Couchbase (claims) unavailable at startup: {}", e.message)
+            }
+        }
+        launch {
+            try {
+                documentRepository.connect()
+            } catch (e: Exception) {
+                logger.warn("Couchbase (documents) unavailable at startup: {}", e.message)
+            }
+        }
+        launch {
+            try {
+                storageService.ensureBucket()
+            } catch (e: Exception) {
+                logger.warn("MinIO/S3 unavailable at startup — uploads will fail until storage is ready: {}", e.message)
             }
         }
 
-        val claimHandler = ClaimHandler(repository, this)
-        val claimInquiryHandler = ClaimInquiryHandler(repository, this)
+        val claimHandler = ClaimHandler(claimRepository, this)
+        val claimInquiryHandler = ClaimInquiryHandler(claimRepository, this)
+        val documentService = DocumentService(storageService, documentRepository)
+        val documentHandler = DocumentHandler(documentService, this)
 
         // ── OpenAPI router ──────────────────────────────────────────────────────
         val routerBuilder = try {
@@ -49,12 +73,17 @@ class MainVerticle : CoroutineVerticle() {
 
         routerBuilder.operation("submitClaim").handler { ctx -> claimHandler.submitClaim(ctx) }
         routerBuilder.operation("inquireClaim").handler { ctx -> claimInquiryHandler.inquireClaim(ctx) }
+        routerBuilder.operation("uploadDocument").handler { ctx -> documentHandler.upload(ctx) }
+        routerBuilder.operation("listDocuments").handler { ctx -> documentHandler.list(ctx) }
+        routerBuilder.operation("downloadDocument").handler { ctx -> documentHandler.download(ctx) }
+        routerBuilder.operation("deleteDocument").handler { ctx -> documentHandler.delete(ctx) }
         routerBuilder.operation("healthCheck").handler { ctx ->
-            val dbStatus = if (repository.isConnected()) "UP" else "DEGRADED"
+            val dbStatus = if (claimRepository.isConnected()) "UP" else "DEGRADED"
+            val storageStatus = "UP" // storage is stateless; failures surface on requests
             ctx.response()
                 .setStatusCode(200)
                 .putHeader("Content-Type", "application/json")
-                .end("""{"status":"UP","db":"$dbStatus","timestamp":"${Instant.now()}"}""")
+                .end("""{"status":"UP","db":"$dbStatus","storage":"$storageStatus","timestamp":"${Instant.now()}"}""")
         }
 
         val apiRouter = routerBuilder.createRouter()
@@ -62,7 +91,19 @@ class MainVerticle : CoroutineVerticle() {
         // ── Main router ─────────────────────────────────────────────────────────
         val mainRouter = Router.router(vertx)
 
-        // BodyHandler and CORS must be on the main router, not the OpenAPI sub-router
+        // Upload-specific BodyHandler: must be registered BEFORE the global one.
+        // BodyHandler is idempotent — if body is already read it calls ctx.next() immediately,
+        // so the global handler below will be a no-op for upload requests.
+        // Use java.io.tmpdir so the upload dir is always writable (works in Docker containers too).
+        val uploadDir = System.getProperty("java.io.tmpdir") + "/claims-uploads"
+        mainRouter.post("/api/documents/upload")
+            .handler(
+                BodyHandler.create(uploadDir)
+                    .setBodyLimit(appConfig.server.maxUploadSize)
+                    .setHandleFileUploads(true),
+            )
+
+        // Global BodyHandler for all other routes (1 MB limit, no file uploads)
         mainRouter.route().handler(
             BodyHandler.create()
                 .setBodyLimit(appConfig.server.maxBodySize)
@@ -127,7 +168,9 @@ class MainVerticle : CoroutineVerticle() {
 
     override suspend fun stop() {
         logger.info("Stopping MainVerticle")
-        repository.disconnect()
+        claimRepository.disconnect()
+        documentRepository.disconnect()
+        storageService.close()
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────

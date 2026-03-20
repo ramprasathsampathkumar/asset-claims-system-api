@@ -10,9 +10,135 @@ servers:
 
 tags:
   - name: Claims
+  - name: Documents
   - name: Health
 
 paths:
+  /api/documents/upload:
+    post:
+      tags: [Documents]
+      summary: Upload a document (PDF, DOC, DOCX, PNG, JPG — max 10 MB)
+      operationId: uploadDocument
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: true
+              properties:
+                file:
+                  type: string
+                  description: The file to upload (binary)
+                uploadedBy:
+                  type: string
+                  description: Optional identifier of the uploader (e.g. user ID or email)
+                referenceNumber:
+                  type: string
+                  description: Optional claim reference number for traceability (e.g. ACL-XXXXX-XXXX)
+                  example: "ACL-M5X2K1-AB3C"
+                documentType:
+                  type: string
+                  description: Optional UI-supplied document label (e.g. passport, bank_statement, proof_of_address)
+                  example: "bank_statement"
+      responses:
+        "201":
+          description: Document uploaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentUploadResponse"
+        "400":
+          description: Validation failed (bad file type, size exceeded, missing file)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/documents:
+    get:
+      tags: [Documents]
+      summary: List all uploaded documents
+      operationId: listDocuments
+      responses:
+        "200":
+          description: List of document metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentListResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/documents/{id}/download:
+    get:
+      tags: [Documents]
+      summary: Download a document by ID
+      operationId: downloadDocument
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: File content with appropriate Content-Type
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Document not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/documents/{id}:
+    delete:
+      tags: [Documents]
+      summary: Delete a document by ID
+      operationId: deleteDocument
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Document deleted successfully
+        "404":
+          description: Document not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /health:
     get:
       tags: [Health]
@@ -589,3 +715,68 @@ components:
           type: boolean
         message:
           type: string
+
+    DocumentMetadata:
+      type: object
+      required: [id, originalFileName, contentType, size, storageBucket, storageKey, uploadedBy, uploadedAt, status]
+      properties:
+        id:
+          type: string
+          example: "3f2504e0-4f89-11d3-9a0c-0305e82c3301"
+        originalFileName:
+          type: string
+          example: "contract.pdf"
+        contentType:
+          type: string
+          example: "application/pdf"
+        size:
+          type: integer
+          format: int64
+          example: 204800
+        storageBucket:
+          type: string
+          example: "documents"
+        storageKey:
+          type: string
+          example: "2026/03/19/3f2504e0-contract.pdf"
+        uploadedBy:
+          type: string
+          example: "anonymous"
+        uploadedAt:
+          type: string
+          example: "2026-03-19T10:00:00Z"
+        status:
+          type: string
+          example: "active"
+        referenceNumber:
+          type: string
+          nullable: true
+          description: Claim reference number this document belongs to, if provided at upload
+          example: "ACL-M5X2K1-AB3C"
+        documentType:
+          type: string
+          nullable: true
+          description: UI-supplied document label (e.g. passport, bank_statement)
+          example: "bank_statement"
+
+    DocumentUploadResponse:
+      type: object
+      required: [success, document]
+      properties:
+        success:
+          type: boolean
+        document:
+          $ref: "#/components/schemas/DocumentMetadata"
+
+    DocumentListResponse:
+      type: object
+      required: [success, documents, total]
+      properties:
+        success:
+          type: boolean
+        documents:
+          type: array
+          items:
+            $ref: "#/components/schemas/DocumentMetadata"
+        total:
+          type: integer
