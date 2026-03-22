@@ -28,11 +28,17 @@ data class AnthropicConfig(
     val claimsApiBaseUrl: String,
 )
 
+data class GeocodingConfig(
+    /** User-Agent sent to Nominatim — required by their ToS. */
+    val nominatimUserAgent: String,
+)
+
 data class AppConfig(
     val server: ServerConfig,
     val couchbase: CouchbaseConfig,
     val s3: S3Config,
     val anthropic: AnthropicConfig,
+    val geocoding: GeocodingConfig,
 ) {
     companion object {
         // Reads env var first, falls back to JVM system property (enables test overrides)
@@ -66,6 +72,9 @@ data class AppConfig(
                 anthropic = AnthropicConfig(
                     apiKey = cfg("ANTHROPIC_API_KEY") ?: "",
                     claimsApiBaseUrl = cfg("CLAIMS_API_BASE_URL") ?: "http://localhost:8080",
+                ),
+                geocoding = GeocodingConfig(
+                    nominatimUserAgent = cfg("NOMINATIM_USER_AGENT") ?: "asset-claims-api/1.0",
                 ),
             )
         }
