@@ -10,6 +10,7 @@ servers:
 
 tags:
   - name: Claims
+  - name: Chat
   - name: Documents
   - name: Health
 
@@ -237,6 +238,59 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /api/chat:
+    post:
+      tags: [Chat]
+      summary: Send a chat message to the AI claims assistant
+      description: |
+        Multi-turn conversational interface powered by Claude (claude-haiku-4-5-20251001) with
+        MCP tool integration. The assistant can look up claim status, list documents, and answer
+        questions about a specific claim after verifying the user's identity.
+
+        Pass the full conversation history on every request to maintain context across turns.
+        The `referenceNumber` and `lastName` are injected into the system prompt so the
+        assistant can verify identity before acting on any claim data.
+
+        **Note:** this endpoint is handled outside the OpenAPI router and performs its own
+        input validation; schema validation is for documentation purposes only.
+      operationId: chat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatRequest"
+            example:
+              message: "What is the status of my claim?"
+              referenceNumber: "ACL-M5X2K1-AB3C"
+              lastName: "Smith"
+              history:
+                - role: "user"
+                  content: "Hello"
+                - role: "assistant"
+                  content: "Hello! How can I help you with your asset claim today?"
+      responses:
+        "200":
+          description: Assistant reply
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatResponse"
+              example:
+                reply: "Your claim ACL-M5X2K1-AB3C is currently in SUBMITTED status, submitted on 2026-03-01."
+        "400":
+          description: Missing required field (message, referenceNumber, or lastName)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatErrorResponse"
+        "500":
+          description: Anthropic API error or unexpected server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatErrorResponse"
+
   /api/submit:
     post:
       tags: [Claims]
@@ -270,6 +324,61 @@ paths:
 
 components:
   schemas:
+
+    ChatRequest:
+      type: object
+      required: [message, referenceNumber, lastName]
+      properties:
+        message:
+          type: string
+          description: The user's latest message
+          example: "What is the status of my claim?"
+        referenceNumber:
+          type: string
+          description: Claim reference number used to scope the assistant's context
+          example: "ACL-M5X2K1-AB3C"
+        lastName:
+          type: string
+          description: Last name of the claimant for identity verification
+          example: "Smith"
+        history:
+          type: array
+          description: |
+            Prior conversation turns in chronological order (oldest first).
+            Omit or send an empty array for the first message in a session.
+          items:
+            $ref: "#/components/schemas/ChatMessage"
+
+    ChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [user, assistant]
+          description: Who sent this message
+        content:
+          type: string
+          description: Text content of the message
+          example: "Hello, I need help with my claim."
+
+    ChatResponse:
+      type: object
+      required: [reply]
+      properties:
+        reply:
+          type: string
+          description: The assistant's natural language response
+          example: "Your claim ACL-M5X2K1-AB3C is currently in SUBMITTED status."
+
+    ChatErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable error message
+          example: "referenceNumber is required."
 
     ClaimInquiry:
       type: object

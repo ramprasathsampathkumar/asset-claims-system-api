@@ -23,10 +23,16 @@ data class S3Config(
     val region: String,
 )
 
+data class AnthropicConfig(
+    val apiKey: String,
+    val claimsApiBaseUrl: String,
+)
+
 data class AppConfig(
     val server: ServerConfig,
     val couchbase: CouchbaseConfig,
     val s3: S3Config,
+    val anthropic: AnthropicConfig,
 ) {
     companion object {
         // Reads env var first, falls back to JVM system property (enables test overrides)
@@ -56,6 +62,10 @@ data class AppConfig(
                     secretKey = cfg("S3_SECRET_KEY") ?: "minioadmin123",
                     bucket = cfg("S3_BUCKET") ?: "documents",
                     region = cfg("S3_REGION") ?: "us-east-1",
+                ),
+                anthropic = AnthropicConfig(
+                    apiKey = cfg("ANTHROPIC_API_KEY") ?: "",
+                    claimsApiBaseUrl = cfg("CLAIMS_API_BASE_URL") ?: "http://localhost:8080",
                 ),
             )
         }
