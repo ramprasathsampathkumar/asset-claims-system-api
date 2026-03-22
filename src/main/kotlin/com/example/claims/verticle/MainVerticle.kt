@@ -1,8 +1,11 @@
 package com.example.claims.verticle
 
+import com.example.claims.client.AnthropicClient
+import com.example.claims.client.ClaimsToolExecutor
 import com.example.claims.config.AppConfig
 import com.example.claims.handler.ClaimHandler
 import com.example.claims.handler.ClaimInquiryHandler
+import com.example.claims.handler.ClaimsChatHandler
 import com.example.claims.handler.DocumentHandler
 import com.example.claims.repository.ClaimRepository
 import com.example.claims.repository.DocumentRepository
@@ -26,6 +29,8 @@ class MainVerticle : CoroutineVerticle() {
     private lateinit var claimRepository: ClaimRepository
     private lateinit var documentRepository: DocumentRepository
     private lateinit var storageService: S3StorageService
+    private lateinit var anthropicClient: AnthropicClient
+    private lateinit var toolExecutor: ClaimsToolExecutor
     private lateinit var appConfig: AppConfig
 
     override suspend fun start() {
@@ -33,6 +38,8 @@ class MainVerticle : CoroutineVerticle() {
         claimRepository = ClaimRepository(appConfig.couchbase)
         documentRepository = DocumentRepository(appConfig.couchbase)
         storageService = S3StorageService(appConfig.s3)
+        toolExecutor = ClaimsToolExecutor(vertx, appConfig.anthropic.claimsApiBaseUrl)
+        anthropicClient = AnthropicClient(vertx, appConfig.anthropic, toolExecutor)
 
         // Connect to Couchbase and storage in the background — HTTP server starts immediately.
         // Operations fail gracefully until backends are ready.
@@ -62,6 +69,7 @@ class MainVerticle : CoroutineVerticle() {
         val claimInquiryHandler = ClaimInquiryHandler(claimRepository, this)
         val documentService = DocumentService(storageService, documentRepository)
         val documentHandler = DocumentHandler(documentService, claimRepository, documentRepository, this)
+        val claimsChatHandler = ClaimsChatHandler(anthropicClient, this)
 
         // ── OpenAPI router ──────────────────────────────────────────────────────
         val routerBuilder = try {
@@ -151,6 +159,10 @@ class MainVerticle : CoroutineVerticle() {
         )
         mainRouter.get("/docs").handler { ctx -> ctx.redirect("/docs/") }
 
+        // Chat endpoint — registered directly (not via OpenAPI router) because it is a
+        // passthrough to Anthropic and performs its own input validation.
+        mainRouter.post("/api/chat").handler { ctx -> claimsChatHandler.chat(ctx) }
+
         mainRouter.route("/*").subRouter(apiRouter)
 
         // ── HTTP server ─────────────────────────────────────────────────────────
@@ -172,6 +184,8 @@ class MainVerticle : CoroutineVerticle() {
         claimRepository.disconnect()
         documentRepository.disconnect()
         storageService.close()
+        anthropicClient.close()
+        toolExecutor.close()
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────

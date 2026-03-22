@@ -73,6 +73,9 @@ services:
       S3_SECRET_KEY: "minioadmin123"
       S3_BUCKET: "documents"
       S3_REGION: "us-east-1"
+      # Anthropic
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      CLAIMS_API_BASE_URL: "http://localhost:8080"
       # Logging
       ENV: "docker"
     depends_on:
