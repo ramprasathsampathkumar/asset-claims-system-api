@@ -511,7 +511,7 @@ components:
 
     ChatRequest:
       type: object
-      required: [message, referenceNumber, lastName]
+      required: [message]
       properties:
         message:
           type: string
@@ -519,11 +519,19 @@ components:
           example: "What is the status of my claim?"
         referenceNumber:
           type: string
-          description: Claim reference number used to scope the assistant's context
+          nullable: true
+          description: |
+            Optional claim reference number. When provided, the assistant can look up
+            claim status and documents without asking for it. If omitted, the assistant
+            will ask the user when a claim-specific action is requested.
           example: "ACL-M5X2K1-AB3C"
         lastName:
           type: string
-          description: Last name of the claimant for identity verification
+          nullable: true
+          description: |
+            Optional claimant last name for identity verification. Used together with
+            referenceNumber for claim lookups. Can be omitted for general inquiries
+            (store finder, FAQs, etc.).
           example: "Smith"
         history:
           type: array

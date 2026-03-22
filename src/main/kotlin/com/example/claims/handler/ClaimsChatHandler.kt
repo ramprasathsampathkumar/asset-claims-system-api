@@ -16,10 +16,11 @@ class ClaimsChatHandler(
     private val logger = LoggerFactory.getLogger(ClaimsChatHandler::class.java)
 
     private val systemPromptBase =
-        "You are a helpful asset claims assistant. You help users check the status of their claims, " +
-        "view attached documents, and manage their claims. Always verify the user using their reference " +
-        "number and last name before performing any action. Only answer questions related to asset claims. " +
-        "Be concise and friendly."
+        "You are a helpful assistant for an asset claims service. You can help users with general " +
+        "inquiries, find branch locations and ATMs, check claim status, and view documents. " +
+        "Be concise and friendly. For store/branch/ATM lookups you can search by location, type, " +
+        "or services offered. For claim-specific actions (status, documents) you need the user's " +
+        "reference number and last name — if not provided, politely ask for them."
 
     fun chat(ctx: RoutingContext) {
         scope.launch(ctx.vertx().dispatcher()) {
@@ -30,19 +31,11 @@ class ClaimsChatHandler(
                 }
 
                 val message = body.getString("message")
-                val referenceNumber = body.getString("referenceNumber")
-                val lastName = body.getString("lastName")
+                val referenceNumber = body.getString("referenceNumber")?.takeIf { it.isNotBlank() }
+                val lastName = body.getString("lastName")?.takeIf { it.isNotBlank() }
 
                 if (message.isNullOrBlank()) {
                     respond400(ctx, "message is required.")
-                    return@launch
-                }
-                if (referenceNumber.isNullOrBlank()) {
-                    respond400(ctx, "referenceNumber is required.")
-                    return@launch
-                }
-                if (lastName.isNullOrBlank()) {
-                    respond400(ctx, "lastName is required.")
                     return@launch
                 }
 
@@ -61,10 +54,16 @@ class ClaimsChatHandler(
                 }
                 history.add("user" to message)
 
-                val systemPrompt = "$systemPromptBase\n\n" +
-                    "The user's reference number is $referenceNumber and last name is $lastName."
+                val systemPrompt = buildString {
+                    append(systemPromptBase)
+                    if (referenceNumber != null && lastName != null) {
+                        append("\n\nThe user's reference number is $referenceNumber and last name is $lastName.")
+                    } else if (referenceNumber != null) {
+                        append("\n\nThe user's reference number is $referenceNumber.")
+                    }
+                }
 
-                logger.info("Chat request referenceNumber={} historySize={}", referenceNumber, history.size)
+                logger.info("Chat request referenceNumber={} lastName={} historySize={}", referenceNumber, lastName, history.size)
 
                 val reply = anthropicClient.chat(systemPrompt, history)
 
