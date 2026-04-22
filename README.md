@@ -4,6 +4,20 @@ Production-ready asset claims submission API built with **Kotlin**, **Vert.x**, 
 
 ---
 
+## Quick Start
+
+> **See [QUICKSTART.md](./QUICKSTART.md) for the fastest path to a running stack.**
+>
+> TL;DR — if Docker Desktop is running and Couchbase is already initialised:
+> ```bash
+> docker compose up -d
+> # wait ~20 seconds
+> curl http://localhost:8080/health
+> ```
+> First time? Follow the one-time Couchbase init steps in [QUICKSTART.md](./QUICKSTART.md).
+
+---
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -142,7 +156,7 @@ docker-compose down
 
 After startup:
 
-1. **Initialize Couchbase** (one time only — see steps above, using http://localhost:8091)
+1. **Initialize Couchbase** (one time only — see [QUICKSTART.md](./QUICKSTART.md) for the scripted init steps)
 2. API available at: http://localhost:8080
 3. Swagger UI: http://localhost:8080/docs
 4. Health check: http://localhost:8080/health
