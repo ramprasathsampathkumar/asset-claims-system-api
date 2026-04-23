@@ -13,8 +13,192 @@ tags:
   - name: Chat
   - name: Documents
   - name: Health
+  - name: Store Locator
+    description: Public store/branch/ATM finder — no authentication required
 
 paths:
+
+  # ── Store Locator ────────────────────────────────────────────────────────────
+
+  /api/store-locator/config:
+    get:
+      tags: [Store Locator]
+      summary: Get map display configuration
+      description: Returns the map tile style URL, default centre coordinates, default zoom level, and attribution string consumed by the frontend map component.
+      operationId: getStoreLocatorConfig
+      responses:
+        "200":
+          description: Map configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoreLocatorConfig"
+              example:
+                styleUrl: "https://tiles.openfreemap.org/styles/liberty"
+                defaultCenter: { lat: 39.8283, lng: -98.5795 }
+                defaultZoom: 4
+                attribution: "© OpenFreeMap © OpenStreetMap contributors"
+
+  /api/store-locator/filters:
+    get:
+      tags: [Store Locator]
+      summary: Get available filter options
+      description: Returns the dropdown options for store type, services, and search radius that the UI renders in its filter panel.
+      operationId: getStoreLocatorFilters
+      responses:
+        "200":
+          description: Filter options
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoreLocatorFilters"
+
+  /api/store-locator/stores:
+    get:
+      tags: [Store Locator]
+      summary: List all stores
+      description: |
+        Returns all 16 seed store locations. `distance` is always `0` (no origin
+        coordinates are supplied). `openNow` is computed from the store's local
+        timezone at the time of the request.
+      operationId: listStores
+      responses:
+        "200":
+          description: Array of all store locations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/StoreWithDistance"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/store-locator/stores/{storeId}:
+    get:
+      tags: [Store Locator]
+      summary: Get a single store by ID
+      description: Returns the store matching the given URL-safe ID. `distance` is `0` because no origin coordinates are provided on this endpoint.
+      operationId: getStoreById
+      parameters:
+        - name: storeId
+          in: path
+          required: true
+          description: URL-safe store identifier (e.g. `nyc-001`)
+          schema:
+            type: string
+            example: "nyc-001"
+      responses:
+        "200":
+          description: Store found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoreWithDistance"
+        "404":
+          description: Store not found
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message]
+                properties:
+                  message:
+                    type: string
+                    example: "Store not found."
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/store-locator/search:
+    post:
+      tags: [Store Locator]
+      summary: Search and filter stores
+      description: |
+        Main search endpoint. All request fields are optional — omitting everything
+        returns all stores sorted alphabetically.
+
+        **Server-side geocoding and automatic radius expansion**
+
+        The frontend never geocodes text queries itself. When `query` is provided
+        without `latitude`/`longitude`, the backend geocodes the query using the
+        Nominatim (OpenStreetMap) API and uses the resolved coordinates as the
+        search origin. Once coordinates are resolved the text filter is dropped
+        (spatial filtering handles locality).
+
+        **Radius behaviour when no `radiusKm` is provided:**
+        The backend automatically expands the search radius until results are found:
+        1. Try **25 km**
+        2. If empty → try **50 km**
+        3. If empty → try **100 km**
+        4. If still empty → fall back to plain text match against store fields
+
+        **Radius behaviour when `radiusKm` is explicitly provided:**
+        The given radius is used exactly — no auto-expansion.
+
+        **When `latitude`/`longitude` are provided directly** (device GPS via "Use My Location"),
+        geocoding is skipped entirely. Any `query` text is applied as an additional
+        text filter on top of the radius. `radiusKm` defaults to no limit if omitted.
+
+        If geocoding returns no result at all, the search falls back to plain text
+        matching (radius filter skipped).
+
+        **Filtering rules:**
+        - `query` — case-insensitive substring match against name, city, state, postal code, and street address
+        - `storeTypes` — store must match **one** of the supplied types (OR within the array)
+        - `services` — store must offer **all** of the supplied services (AND logic)
+        - `radiusKm` — applied only when coordinates are available (from client or geocoding)
+        - `openNow: true` — includes only stores that are currently open in their local timezone
+
+        **Sorting:**
+        - When coordinates are available: sorted by Haversine distance ascending
+        - Otherwise: sorted alphabetically by store name
+      operationId: searchStores
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StoreSearchRequest"
+            examples:
+              nearby_branches:
+                summary: Branches within 25 km of Manhattan with wire transfer
+                value:
+                  latitude: 40.7128
+                  longitude: -74.0060
+                  radiusKm: 25
+                  storeTypes: [branch]
+                  services: [wire_transfer]
+              city_text_search:
+                summary: All stores in Chicago
+                value:
+                  query: "Chicago"
+              open_atms:
+                summary: ATMs that are open right now
+                value:
+                  storeTypes: [atm]
+                  openNow: true
+      responses:
+        "200":
+          description: Matching stores
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoreSearchResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /api/documents/upload:
     post:
       tags: [Documents]
@@ -327,7 +511,7 @@ components:
 
     ChatRequest:
       type: object
-      required: [message, referenceNumber, lastName]
+      required: [message]
       properties:
         message:
           type: string
@@ -335,11 +519,19 @@ components:
           example: "What is the status of my claim?"
         referenceNumber:
           type: string
-          description: Claim reference number used to scope the assistant's context
+          nullable: true
+          description: |
+            Optional claim reference number. When provided, the assistant can look up
+            claim status and documents without asking for it. If omitted, the assistant
+            will ask the user when a claim-specific action is requested.
           example: "ACL-M5X2K1-AB3C"
         lastName:
           type: string
-          description: Last name of the claimant for identity verification
+          nullable: true
+          description: |
+            Optional claimant last name for identity verification. Used together with
+            referenceNumber for claim lookups. Can be omitted for general inquiries
+            (store finder, FAQs, etc.).
           example: "Smith"
         history:
           type: array
@@ -963,3 +1155,243 @@ components:
             $ref: "#/components/schemas/DocumentMetadata"
         total:
           type: integer
+
+    # ── Store Locator schemas ────────────────────────────────────────────────
+
+    StoreLocatorConfig:
+      type: object
+      required: [styleUrl, defaultCenter, defaultZoom, attribution]
+      properties:
+        styleUrl:
+          type: string
+          description: MapLibre-compatible tile style URL
+          example: "https://tiles.openfreemap.org/styles/liberty"
+        defaultCenter:
+          type: object
+          required: [lat, lng]
+          properties:
+            lat:
+              type: number
+              format: double
+              example: 39.8283
+            lng:
+              type: number
+              format: double
+              example: -98.5795
+        defaultZoom:
+          type: integer
+          example: 4
+        attribution:
+          type: string
+          example: "© OpenFreeMap © OpenStreetMap contributors"
+
+    FilterOption:
+      type: object
+      required: [value, label]
+      properties:
+        value:
+          type: string
+          example: "branch"
+        label:
+          type: string
+          example: "Branch"
+
+    RadiusOption:
+      type: object
+      required: [value, label]
+      properties:
+        value:
+          type: integer
+          description: Radius in kilometres
+          example: 25
+        label:
+          type: string
+          example: "25 km"
+
+    StoreLocatorFilters:
+      type: object
+      required: [storeTypes, services, radiusOptions]
+      properties:
+        storeTypes:
+          type: array
+          items:
+            $ref: "#/components/schemas/FilterOption"
+        services:
+          type: array
+          items:
+            $ref: "#/components/schemas/FilterOption"
+        radiusOptions:
+          type: array
+          items:
+            $ref: "#/components/schemas/RadiusOption"
+
+    DayHours:
+      type: object
+      required: [open, close, closed]
+      properties:
+        open:
+          type: string
+          description: Opening time in HH:MM (24-hour)
+          example: "09:00"
+        close:
+          type: string
+          description: Closing time in HH:MM (24-hour)
+          example: "17:00"
+        closed:
+          type: boolean
+          description: True if the location is closed all day
+          example: false
+
+    StoreHours:
+      type: object
+      required: [monday, tuesday, wednesday, thursday, friday, saturday, sunday]
+      properties:
+        monday:
+          $ref: "#/components/schemas/DayHours"
+        tuesday:
+          $ref: "#/components/schemas/DayHours"
+        wednesday:
+          $ref: "#/components/schemas/DayHours"
+        thursday:
+          $ref: "#/components/schemas/DayHours"
+        friday:
+          $ref: "#/components/schemas/DayHours"
+        saturday:
+          $ref: "#/components/schemas/DayHours"
+        sunday:
+          $ref: "#/components/schemas/DayHours"
+
+    StoreAddress:
+      type: object
+      required: [line1, city, state, postalCode, country]
+      properties:
+        line1:
+          type: string
+          example: "100 Broadway"
+        line2:
+          type: string
+          nullable: true
+          example: "Suite 200"
+        city:
+          type: string
+          example: "New York"
+        state:
+          type: string
+          example: "NY"
+        postalCode:
+          type: string
+          example: "10005"
+        country:
+          type: string
+          example: "US"
+
+    StoreWithDistance:
+      type: object
+      required: [id, name, storeType, address, latitude, longitude, phone, hours, services, distance, openNow]
+      properties:
+        id:
+          type: string
+          description: URL-safe unique identifier
+          example: "nyc-001"
+        name:
+          type: string
+          example: "Manhattan Financial District Branch"
+        storeType:
+          type: string
+          enum: [branch, service_center, atm]
+          example: "branch"
+        address:
+          $ref: "#/components/schemas/StoreAddress"
+        latitude:
+          type: number
+          format: double
+          example: 40.7074
+        longitude:
+          type: number
+          format: double
+          example: -74.0113
+        phone:
+          type: string
+          example: "+1-212-555-0101"
+        hours:
+          $ref: "#/components/schemas/StoreHours"
+        services:
+          type: array
+          items:
+            type: string
+          example: [notary, wire_transfer, financial_advisor]
+        distance:
+          type: number
+          format: double
+          description: Haversine distance in kilometres from the search origin. `0` when no origin was provided.
+          example: 2.4
+        openNow:
+          type: boolean
+          description: Whether the store is currently open, computed from the store's local timezone.
+          example: true
+
+    StoreSearchRequest:
+      type: object
+      description: All fields are optional. Omitting everything returns all stores sorted alphabetically.
+      properties:
+        query:
+          type: string
+          description: |
+            Free-text input. Behaviour depends on the other fields present:
+            - **With lat/lng (GPS)** — applied as a case-insensitive text filter on top of the radius.
+            - **With `radiusKm`, no lat/lng** — treated as a place name; geocoded via Nominatim to
+              get coordinates, then the explicit radius is applied. Text matching is skipped.
+            - **Without `radiusKm`, no lat/lng** — geocoded, then radii of 25 → 50 → 100 km are
+              tried in order until results are found. Falls back to plain text match if all fail.
+          example: "Manhattan"
+        latitude:
+          type: number
+          format: double
+          description: Search origin latitude (WGS84). Required for distance-based sorting and radius filtering.
+          example: 40.7128
+        longitude:
+          type: number
+          format: double
+          description: Search origin longitude (WGS84). Required for distance-based sorting and radius filtering.
+          example: -74.0060
+        radiusKm:
+          type: number
+          format: double
+          description: |
+            Maximum distance from the search origin in kilometres.
+            - When omitted and `query` is provided without lat/lng, the backend automatically
+              tries 25 → 50 → 100 km until results are found.
+            - When omitted with lat/lng (GPS), no radius limit is applied.
+            - Ignored when neither coordinates nor a geocodable query are available.
+          example: 25
+        storeTypes:
+          type: array
+          description: Store must match one of the supplied types (OR logic within the array).
+          items:
+            type: string
+            enum: [branch, service_center, atm]
+          example: [branch, service_center]
+        services:
+          type: array
+          description: Store must offer all of the supplied services (AND logic).
+          items:
+            type: string
+            enum: [notary, safe_deposit, currency_exchange, wire_transfer, financial_advisor, document_printing]
+          example: [notary, wire_transfer]
+        openNow:
+          type: boolean
+          description: When true, only stores that are currently open (in their local timezone) are returned.
+          example: true
+
+    StoreSearchResponse:
+      type: object
+      required: [stores, totalCount]
+      properties:
+        stores:
+          type: array
+          items:
+            $ref: "#/components/schemas/StoreWithDistance"
+        totalCount:
+          type: integer
+          description: Total number of stores matching the search criteria
+          example: 5

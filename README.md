@@ -4,6 +4,20 @@ Production-ready asset claims submission API built with **Kotlin**, **Vert.x**, 
 
 ---
 
+## Quick Start
+
+> **See [QUICKSTART.md](./QUICKSTART.md) for the fastest path to a running stack.**
+>
+> TL;DR — if Docker Desktop is running and Couchbase is already initialised:
+> ```bash
+> docker compose up -d
+> # wait ~20 seconds
+> curl http://localhost:8080/health
+> ```
+> First time? Follow the one-time Couchbase init steps in [QUICKSTART.md](./QUICKSTART.md).
+
+---
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -142,7 +156,7 @@ docker-compose down
 
 After startup:
 
-1. **Initialize Couchbase** (one time only — see steps above, using http://localhost:8091)
+1. **Initialize Couchbase** (one time only — see [QUICKSTART.md](./QUICKSTART.md) for the scripted init steps)
 2. API available at: http://localhost:8080
 3. Swagger UI: http://localhost:8080/docs
 4. Health check: http://localhost:8080/health
@@ -213,6 +227,43 @@ Response:
 ```
 POST /api/submit
 Content-Type: application/json
+```
+
+### Chat Assistant
+
+```
+POST /api/chat
+Content-Type: application/json
+```
+
+```json
+{ "message": "What is the status of my claim?", "referenceNumber": "ACL-TC5MOF-7LC8", "lastName": "Smith" }
+```
+
+`referenceNumber` and `lastName` are optional — the assistant asks for them only when needed.
+
+#### Chat Flow
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant ChatHandler
+    participant Claude (Haiku)
+    participant ToolExecutor
+    participant Internal API
+
+    Client->>ChatHandler: POST /api/chat { message, history }
+    ChatHandler->>Claude (Haiku): messages + tool schemas + system prompt
+    alt Tool needed (e.g. inquire_claim)
+        Claude (Haiku)-->>ChatHandler: stop_reason: tool_use
+        ChatHandler->>ToolExecutor: execute(toolName, input)
+        ToolExecutor->>Internal API: POST /api/inquiry (or other endpoint)
+        Internal API-->>ToolExecutor: claim data
+        ToolExecutor-->>ChatHandler: tool result
+        ChatHandler->>Claude (Haiku): tool_result → continue
+    end
+    Claude (Haiku)-->>ChatHandler: stop_reason: end_turn + text reply
+    ChatHandler-->>Client: { "reply": "..." }
 ```
 
 ### Swagger UI

@@ -7,6 +7,8 @@ import com.example.claims.handler.ClaimHandler
 import com.example.claims.handler.ClaimInquiryHandler
 import com.example.claims.handler.ClaimsChatHandler
 import com.example.claims.handler.DocumentHandler
+import com.example.claims.handler.StoreLocatorHandler
+import com.example.claims.service.GeocodingService
 import com.example.claims.repository.ClaimRepository
 import com.example.claims.repository.DocumentRepository
 import com.example.claims.service.DocumentService
@@ -31,6 +33,7 @@ class MainVerticle : CoroutineVerticle() {
     private lateinit var storageService: S3StorageService
     private lateinit var anthropicClient: AnthropicClient
     private lateinit var toolExecutor: ClaimsToolExecutor
+    private lateinit var geocodingService: GeocodingService
     private lateinit var appConfig: AppConfig
 
     override suspend fun start() {
@@ -40,6 +43,7 @@ class MainVerticle : CoroutineVerticle() {
         storageService = S3StorageService(appConfig.s3)
         toolExecutor = ClaimsToolExecutor(vertx, appConfig.anthropic.claimsApiBaseUrl)
         anthropicClient = AnthropicClient(vertx, appConfig.anthropic, toolExecutor)
+        geocodingService = GeocodingService(vertx, appConfig.geocoding.nominatimUserAgent)
 
         // Connect to Couchbase and storage in the background — HTTP server starts immediately.
         // Operations fail gracefully until backends are ready.
@@ -70,6 +74,7 @@ class MainVerticle : CoroutineVerticle() {
         val documentService = DocumentService(storageService, documentRepository)
         val documentHandler = DocumentHandler(documentService, claimRepository, documentRepository, this)
         val claimsChatHandler = ClaimsChatHandler(anthropicClient, this)
+        val storeLocatorHandler = StoreLocatorHandler(this, geocodingService)
 
         // ── OpenAPI router ──────────────────────────────────────────────────────
         val routerBuilder = try {
@@ -163,6 +168,13 @@ class MainVerticle : CoroutineVerticle() {
         // passthrough to Anthropic and performs its own input validation.
         mainRouter.post("/api/chat").handler { ctx -> claimsChatHandler.chat(ctx) }
 
+        // Store locator endpoints — public, no auth, no OpenAPI validation needed.
+        mainRouter.get("/api/store-locator/config").handler { ctx -> storeLocatorHandler.getConfig(ctx) }
+        mainRouter.get("/api/store-locator/filters").handler { ctx -> storeLocatorHandler.getFilters(ctx) }
+        mainRouter.get("/api/store-locator/stores").handler { ctx -> storeLocatorHandler.getAllStores(ctx) }
+        mainRouter.get("/api/store-locator/stores/:storeId").handler { ctx -> storeLocatorHandler.getStoreById(ctx) }
+        mainRouter.post("/api/store-locator/search").handler { ctx -> storeLocatorHandler.search(ctx) }
+
         mainRouter.route("/*").subRouter(apiRouter)
 
         // ── HTTP server ─────────────────────────────────────────────────────────
@@ -186,6 +198,7 @@ class MainVerticle : CoroutineVerticle() {
         storageService.close()
         anthropicClient.close()
         toolExecutor.close()
+        geocodingService.close()
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────

@@ -58,6 +58,38 @@ class AnthropicClient(
             description = "List all documents in the system",
             properties = JsonObject(),
         ))
+        .add(tool(
+            name = "search_stores",
+            description = """Search for branch locations, service centers, and ATMs. Supports text queries (e.g. "Manhattan"),
+                |GPS coordinates, radius filtering, store type filtering, and service filtering.
+                |When a city/place name is given without coordinates, the backend geocodes it automatically.
+                |If no radius is specified, the backend tries 25 km → 50 km → 100 km until results are found.""".trimMargin(),
+            properties = JsonObject()
+                .put("query", prop("string", "Place name or free-text search (e.g. 'Manhattan', 'Chicago Loop'). Geocoded server-side when no lat/lng provided."))
+                .put("latitude", prop("number", "Search origin latitude (WGS84). Provide when user shares their GPS location."))
+                .put("longitude", prop("number", "Search origin longitude (WGS84). Provide when user shares their GPS location."))
+                .put("radiusKm", prop("number", "Search radius in kilometres. If omitted, auto-expands from 25 → 50 → 100 km."))
+                .put("storeTypes", JsonObject().put("type", "array").put("items", JsonObject().put("type", "string")).put("description", "Filter by type: branch, service_center, atm"))
+                .put("services", JsonObject().put("type", "array").put("items", JsonObject().put("type", "string")).put("description", "Filter by services offered (AND logic): notary, safe_deposit, currency_exchange, wire_transfer, financial_advisor, document_printing"))
+                .put("openNow", prop("boolean", "When true, return only stores currently open in their local timezone")),
+        ))
+        .add(tool(
+            name = "list_stores",
+            description = "List all store locations (branches, service centers, ATMs) with their current open/closed status.",
+            properties = JsonObject(),
+        ))
+        .add(tool(
+            name = "get_store",
+            description = "Get full details for a single store by its ID (e.g. nyc-001, chi-002).",
+            required = listOf("storeId"),
+            properties = JsonObject()
+                .put("storeId", prop("string", "URL-safe store identifier (e.g. nyc-001, lax-002)")),
+        ))
+        .add(tool(
+            name = "get_store_locator_filters",
+            description = "Get the available filter options for the store locator: store types, services, and radius options.",
+            properties = JsonObject(),
+        ))
 
     /**
      * Sends a conversation to Claude and handles the full tool-use loop.
