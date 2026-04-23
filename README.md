@@ -229,6 +229,43 @@ POST /api/submit
 Content-Type: application/json
 ```
 
+### Chat Assistant
+
+```
+POST /api/chat
+Content-Type: application/json
+```
+
+```json
+{ "message": "What is the status of my claim?", "referenceNumber": "ACL-TC5MOF-7LC8", "lastName": "Smith" }
+```
+
+`referenceNumber` and `lastName` are optional — the assistant asks for them only when needed.
+
+#### Chat Flow
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant ChatHandler
+    participant Claude (Haiku)
+    participant ToolExecutor
+    participant Internal API
+
+    Client->>ChatHandler: POST /api/chat { message, history }
+    ChatHandler->>Claude (Haiku): messages + tool schemas + system prompt
+    alt Tool needed (e.g. inquire_claim)
+        Claude (Haiku)-->>ChatHandler: stop_reason: tool_use
+        ChatHandler->>ToolExecutor: execute(toolName, input)
+        ToolExecutor->>Internal API: POST /api/inquiry (or other endpoint)
+        Internal API-->>ToolExecutor: claim data
+        ToolExecutor-->>ChatHandler: tool result
+        ChatHandler->>Claude (Haiku): tool_result → continue
+    end
+    Claude (Haiku)-->>ChatHandler: stop_reason: end_turn + text reply
+    ChatHandler-->>Client: { "reply": "..." }
+```
+
 ### Swagger UI
 
 ```
