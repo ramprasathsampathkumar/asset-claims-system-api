@@ -1,6 +1,31 @@
 # Asset Claims API
 
-Production-ready asset claims submission API built with **Kotlin**, **Vert.x**, **OpenAPI 3.0**, and **Couchbase**.
+Production-ready asset claims submission API built with **Kotlin**, **Vert.x**, **OpenAPI 3.0**, **Couchbase**, and **MinIO/S3**, with a built-in **Claude-powered chat assistant**.
+
+---
+
+## Quick Start
+
+> **See [QUICKSTART.md](./QUICKSTART.md) for the fastest path to a running stack.**
+>
+> TL;DR — if Docker Desktop is running and Couchbase is already initialised:
+> ```bash
+> docker compose up -d
+> # wait ~20 seconds
+> curl http://localhost:8080/health
+> ```
+> First time? Follow the one-time Couchbase init steps in [QUICKSTART.md](./QUICKSTART.md).
+
+---
+
+## Features
+
+- **Claim submission** — multi-step wizard (personal details → asset → bank payout) with OpenAPI contract validation
+- **Claim inquiry** — look up claim status by reference number + identity verification
+- **Document management** — upload/download/delete documents (PDF, DOCX, PNG, JPG) stored in MinIO/S3
+- **Chat assistant** — Claude Haiku-powered conversational assistant with tool-calling (check claim status, list documents)
+- **Multi-language validation** — 11 locales: en, fr, es, de, pt, zh, ar, hi, bn, ur, ru
+- **Swagger UI** — interactive API docs served at `/docs`
 
 ---
 
@@ -24,8 +49,10 @@ Production-ready asset claims submission API built with **Kotlin**, **Vert.x**, 
 |---|---|
 | Language | Kotlin 2.0 / JVM 21 |
 | Framework | Vert.x 4.5 (non-blocking, event-loop) |
-| API Contract | OpenAPI 3.0 (contract-first) |
-| Database | Couchbase Community (Dockerized) |
+| API Contract | OpenAPI 3.0 (contract-first, `vertx-web-openapi`) |
+| Database | Couchbase Enterprise 7.6.3 |
+| Object Storage | MinIO (S3-compatible) / AWS S3 |
+| AI | Anthropic Claude Haiku (chat assistant) |
 | Async | Kotlin coroutines (`vertx-lang-kotlin-coroutines`) |
 | Logging | Logback + Logstash JSON encoder |
 | Build | Gradle Kotlin DSL + Shadow plugin (fat jar) |
@@ -37,37 +64,64 @@ Production-ready asset claims submission API built with **Kotlin**, **Vert.x**, 
 
 ```
 asset-claims-system-api/
-├── build.gradle.kts                  # Gradle Kotlin DSL build file
+├── build.gradle.kts
 ├── settings.gradle.kts
-├── Dockerfile                        # Multi-stage Docker build
-├── docker-compose.yml                # API + Couchbase services
-├── .env.example                      # Environment variable reference
+├── Dockerfile                          # Multi-stage Docker build
+├── docker-compose.yml                  # API + Couchbase + MinIO services
+├── QUICKSTART.md
 └── src/
     ├── main/
     │   ├── kotlin/com/example/claims/
-    │   │   ├── Main.kt               # Application entry point
+    │   │   ├── Main.kt                 # Entry point, graceful shutdown
     │   │   ├── config/
-    │   │   │   └── AppConfig.kt      # Environment-based configuration
+    │   │   │   └── AppConfig.kt        # Env-based configuration
     │   │   ├── verticle/
-    │   │   │   └── MainVerticle.kt   # Vert.x verticle, routing, OpenAPI wiring
+    │   │   │   └── MainVerticle.kt     # Router wiring, OpenAPI setup
     │   │   ├── handler/
-    │   │   │   └── ClaimHandler.kt   # HTTP request handler
+    │   │   │   ├── ClaimHandler.kt     # POST /api/submit
+    │   │   │   ├── ClaimInquiryHandler.kt  # POST /api/inquiry
+    │   │   │   ├── ClaimsChatHandler.kt    # POST /api/chat
+    │   │   │   └── DocumentHandler.kt      # /api/documents/*
+    │   │   ├── client/
+    │   │   │   ├── AnthropicClient.kt      # Anthropic API HTTP client
+    │   │   │   └── ClaimsToolExecutor.kt   # Chat tool implementations
     │   │   ├── repository/
-    │   │   │   └── ClaimRepository.kt # Couchbase persistence
+    │   │   │   ├── ClaimRepository.kt      # Couchbase claim persistence
+    │   │   │   └── DocumentRepository.kt   # Couchbase document metadata
+    │   │   ├── service/
+    │   │   │   └── DocumentService.kt      # Upload orchestration
+    │   │   ├── storage/
+    │   │   │   ├── StorageService.kt       # Storage interface
+    │   │   │   └── S3StorageService.kt     # MinIO/S3 implementation
+    │   │   ├── model/
+    │   │   │   └── DocumentMetadata.kt
     │   │   └── validation/
-    │   │       └── BankFieldsValidator.kt # Currency-specific bank field rules
+    │   │       ├── Messages.kt             # Locale-aware message loading
+    │   │       ├── Step2Validator.kt       # Personal details validation
+    │   │       ├── Step3Validator.kt       # Asset type discriminator
+    │   │       ├── BankFieldsValidator.kt  # Currency-specific bank rules
+    │   │       └── InquiryValidator.kt     # Inquiry request validation
     │   └── resources/
-    │       ├── logback.xml           # JSON structured logging
+    │       ├── logback.xml
+    │       ├── messages/                   # messages_{locale}.properties (11 locales)
     │       ├── openapi/
-    │       │   └── claims-api.yaml   # OpenAPI 3.0 spec (single source of truth)
+    │       │   └── claims-api.yaml         # OpenAPI 3.0 spec (single source of truth)
     │       └── swagger-ui/
-    │           └── index.html        # Swagger UI served at /docs
+    │           └── index.html              # Swagger UI served at /docs
     └── test/
         └── kotlin/com/example/claims/
             ├── handler/
-            │   └── ClaimSubmitIntegrationTest.kt
-            └── repository/
-                └── BankFieldsValidatorTest.kt
+            │   ├── ClaimSubmitIntegrationTest.kt
+            │   ├── ClaimInquiryIntegrationTest.kt
+            │   └── DocumentHandlerIntegrationTest.kt
+            ├── service/
+            │   └── DocumentServiceTest.kt
+            ├── repository/
+            │   └── BankFieldsValidatorTest.kt
+            └── validation/
+                ├── MessagesTest.kt
+                ├── Step2ValidatorTest.kt
+                └── Step3ValidatorTest.kt
 ```
 
 ---
@@ -76,13 +130,7 @@ asset-claims-system-api/
 
 ```bash
 brew install openjdk@21
-brew install gradle
 brew install --cask docker
-
-# Verify
-java -version   # should show 21.x
-gradle -v
-docker --version
 
 # Set JAVA_HOME if needed
 export JAVA_HOME=$(/usr/libexec/java_home -v 21)
@@ -90,122 +138,108 @@ export JAVA_HOME=$(/usr/libexec/java_home -v 21)
 
 ---
 
-## Running Locally (without Docker)
-
-### 1. Start Couchbase
-
-```bash
-docker run -d \
-  --name couchbase-local \
-  -p 8091-8096:8091-8096 \
-  -p 11210:11210 \
-  couchbase:community-7.6.3
-```
-
-### 2. Initialize Couchbase Cluster
-
-Open http://localhost:8091 in your browser and:
-
-1. Click **Setup New Cluster**
-2. Cluster name: `claims-cluster`
-3. Username: `Administrator`
-4. Password: `password`
-5. Click **Next → Finish with Defaults**
-6. Go to **Buckets → Add Bucket**
-7. Bucket name: `claims`, RAM quota: `256 MB`
-8. Click **Add Bucket**
-9. Go to **Query → Query Editor** and create a primary index:
-   ```sql
-   CREATE PRIMARY INDEX ON `claims`;
-   ```
-
-### 3. Build and Run
-
-```bash
-# Build fat jar
-./gradlew shadowJar
-
-# Run with environment variables
-export COUCHBASE_HOST=localhost
-export COUCHBASE_USERNAME=Administrator
-export COUCHBASE_PASSWORD=password
-export COUCHBASE_BUCKET=claims
-
-java -jar build/libs/claims-api.jar
-```
-
-The API starts at: http://localhost:8080
-
----
-
 ## Running with Docker Compose
 
 ```bash
-# Build and start all services
-docker-compose up --build
-
-# In detached mode
-docker-compose up --build -d
+# Build and start all services (API + Couchbase + MinIO)
+docker compose up --build -d
 
 # View logs
-docker-compose logs -f api
+docker compose logs -f api
 
 # Stop
-docker-compose down
+docker compose down
 ```
 
 After startup:
 
-1. **Initialize Couchbase** (one time only — see [QUICKSTART.md](./QUICKSTART.md) for the scripted init steps)
-2. API available at: http://localhost:8080
+1. **Initialize Couchbase** — one time only, see [QUICKSTART.md](./QUICKSTART.md)
+2. API: http://localhost:8080
 3. Swagger UI: http://localhost:8080/docs
 4. Health check: http://localhost:8080/health
+5. MinIO console: http://localhost:9001 (minioadmin / minioadmin123)
+6. Couchbase console: http://localhost:8091 (Administrator / password)
 
 ---
 
-## Couchbase Setup (Programmatic — Optional)
+## Running Locally (without Docker)
 
-After the cluster is running you can use the REST API:
+### 1. Start dependencies
 
 ```bash
-# Initialize cluster
-curl -u Administrator:password \
-  http://localhost:8091/clusterInit \
-  -d "clusterName=claims-cluster" \
-  -d "services=kv,n1ql,index" \
-  -d "memoryQuota=512" \
-  -d "username=Administrator" \
-  -d "password=password" \
-  -d "port=8091"
+# Couchbase
+docker run -d --name couchbase-local \
+  -p 8091-8096:8091-8096 -p 11210:11210 \
+  couchbase:enterprise-7.6.3
 
-# Create bucket
-curl -u Administrator:password \
-  http://localhost:8091/pools/default/buckets \
-  -d "name=claims" \
-  -d "bucketType=couchbase" \
-  -d "ramQuotaMB=256"
+# MinIO
+docker run -d --name minio-local \
+  -p 9000:9000 -p 9001:9001 \
+  -e MINIO_ROOT_USER=minioadmin \
+  -e MINIO_ROOT_PASSWORD=minioadmin123 \
+  minio/minio server /data --console-address ":9001"
+```
 
-# Create primary index (wait for cluster to initialize first)
-curl -u Administrator:password \
-  http://localhost:8093/query/service \
-  -d 'statement=CREATE+PRIMARY+INDEX+ON+`claims`'
+### 2. Initialize Couchbase (one-time)
+
+See [QUICKSTART.md](./QUICKSTART.md) for the scripted init steps.
+
+### 3. Build and run
+
+```bash
+./gradlew shadowJar
+
+export COUCHBASE_HOST=localhost
+export COUCHBASE_USERNAME=Administrator
+export COUCHBASE_PASSWORD=password
+export COUCHBASE_BUCKET=claims
+export S3_ENDPOINT=http://localhost:9000
+export S3_ACCESS_KEY=minioadmin
+export S3_SECRET_KEY=minioadmin123
+export ANTHROPIC_API_KEY=sk-ant-...
+
+java -jar build/libs/claims-api.jar
 ```
 
 ---
 
 ## Environment Variables
 
+### Server
+
 | Variable | Default | Description |
 |---|---|---|
 | `SERVER_PORT` | `8080` | HTTP server port |
 | `SERVER_HOST` | `0.0.0.0` | HTTP bind host |
-| `MAX_BODY_SIZE` | `1048576` | Max request body in bytes (1 MB) |
-| `CORS_ALLOWED_ORIGINS` | `*` | Comma-separated CORS origins |
+| `MAX_BODY_SIZE` | `1048576` | Max JSON request body (bytes) |
+| `MAX_UPLOAD_SIZE` | `10485760` | Max file upload size (bytes) |
+| `CORS_ALLOWED_ORIGINS` | `*` | Comma-separated allowed origins |
+
+### Couchbase
+
+| Variable | Default | Description |
+|---|---|---|
 | `COUCHBASE_HOST` | `localhost` | Couchbase host |
 | `COUCHBASE_USERNAME` | `Administrator` | Couchbase username |
 | `COUCHBASE_PASSWORD` | `password` | Couchbase password |
 | `COUCHBASE_BUCKET` | `claims` | Couchbase bucket name |
-| `ENV` | `local` | Environment label (used in logs) |
+
+### Object Storage (MinIO / S3)
+
+| Variable | Default | Description |
+|---|---|---|
+| `S3_ENDPOINT` | `http://localhost:9000` | S3 endpoint URL (empty = real AWS S3) |
+| `S3_ACCESS_KEY` | `minioadmin` | S3 access key |
+| `S3_SECRET_KEY` | `minioadmin123` | S3 secret key |
+| `S3_BUCKET` | `documents` | S3 bucket for uploaded files |
+| `S3_REGION` | `us-east-1` | S3 region |
+
+### Anthropic (Chat Assistant)
+
+| Variable | Default | Description |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | _(empty)_ | Anthropic API key — required for `/api/chat` |
+| `CLAIMS_API_BASE_URL` | `http://localhost:8080` | Self-referencing URL used by tool executor |
 
 ---
 
@@ -217,10 +251,13 @@ curl -u Administrator:password \
 GET /health
 ```
 
-Response:
 ```json
-{ "status": "UP", "timestamp": "2026-03-01T10:30:00Z" }
+{ "status": "UP", "db": "UP", "storage": "UP", "timestamp": "2026-04-30T10:00:00Z" }
 ```
+
+`db` is `DEGRADED` if Couchbase is unreachable. The API starts and serves requests immediately; backends connect in the background.
+
+---
 
 ### Submit Claim
 
@@ -228,6 +265,127 @@ Response:
 POST /api/submit
 Content-Type: application/json
 ```
+
+Four-step payload validated by OpenAPI + server-side validators:
+
+| Step | Content |
+|---|---|
+| `step1` | Confirmation flag (`confirmed: true`) |
+| `step2` | Personal details (name, DOB, ID, address, contact) |
+| `step3` | Asset details — discriminated by `assetType` |
+| `step4` | Payout currency + bank fields |
+
+**Success (200):**
+```json
+{ "success": true, "referenceNumber": "ACL-M5X2K1-AB3C", "message": "Claim submitted successfully." }
+```
+
+**Validation error (422):**
+```json
+{
+  "success": false,
+  "message": "Validation failed. Please review your submission.",
+  "errors": [{ "field": "step2.email", "code": "invalid_string", "message": "Invalid email address." }]
+}
+```
+
+Reference number format: `ACL-{base36(epochSeconds)}-{random4chars}`
+
+---
+
+### Claim Inquiry
+
+```
+POST /api/inquiry
+Content-Type: application/json
+```
+
+```json
+{
+  "referenceNumber": "ACL-M5X2K1-AB3C",
+  "lastName": "Smith",
+  "dateOfBirth": "1990-04-22",
+  "locale": "en"
+}
+```
+
+`dateOfBirth` is optional. Returns claim status, asset type, submission date, and personal details summary.
+
+---
+
+### Document Upload
+
+```
+POST /api/documents/upload
+Content-Type: multipart/form-data
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `file` | Yes | File to upload (PDF, DOC, DOCX, PNG, JPG — max 10 MB) |
+| `uploadedBy` | No | Uploader identifier (e.g. user ID or email) |
+| `referenceNumber` | No | Claim reference for traceability |
+| `documentType` | No | Label (e.g. `passport`, `bank_statement`) |
+
+```bash
+curl -X POST http://localhost:8080/api/documents/upload \
+  -F "file=@passport.pdf" \
+  -F "referenceNumber=ACL-M5X2K1-AB3C" \
+  -F "documentType=passport"
+```
+
+**Success (200):**
+```json
+{ "id": "doc-abc123", "filename": "passport.pdf", "size": 204800, "uploadedAt": "2026-04-30T10:00:00Z" }
+```
+
+---
+
+### List Documents (all)
+
+```
+GET /api/documents
+```
+
+Returns metadata for all uploaded documents.
+
+---
+
+### List Documents by Claim (identity-verified)
+
+```
+POST /api/documents/by-claim
+Content-Type: application/json
+```
+
+```json
+{ "referenceNumber": "ACL-M5X2K1-AB3C", "lastName": "Smith", "dateOfBirth": "1990-04-22" }
+```
+
+Identity is verified against the claim record before listing documents. Returns only documents tagged with the matching `referenceNumber`.
+
+---
+
+### Download Document
+
+```
+GET /api/documents/{documentId}/download
+```
+
+Returns the file binary with the original `Content-Type`.
+
+---
+
+### Delete Document
+
+```
+DELETE /api/documents/{documentId}
+```
+
+Deletes from both S3 storage and Couchbase metadata.
+
+---
+
 
 ### Chat Assistant
 
@@ -237,10 +395,29 @@ Content-Type: application/json
 ```
 
 ```json
-{ "message": "What is the status of my claim?", "referenceNumber": "ACL-TC5MOF-7LC8", "lastName": "Smith" }
+{
+  "message": "What is the status of my claim?",
+  "referenceNumber": "ACL-M5X2K1-AB3C",
+  "lastName": "Smith",
+  "history": []
+}
 ```
 
-`referenceNumber` and `lastName` are optional — the assistant asks for them only when needed.
+`referenceNumber` and `lastName` are optional — the assistant asks for them only when needed. `history` is an array of prior `{ role, content }` turns for multi-turn conversations.
+
+**Response:**
+```json
+{ "reply": "Your claim ACL-M5X2K1-AB3C is currently under review, submitted on 2026-04-15." }
+```
+
+The assistant uses **Claude Haiku** with tool-calling to fetch live data:
+
+| Tool | Description |
+|---|---|
+| `inquire_claim` | Look up claim status via `POST /api/inquiry` |
+| `list_claim_documents` | List documents for a claim via `POST /api/documents/by-claim` |
+| `list_documents` | List all documents |
+| `check_health` | Check API health |
 
 #### Chat Flow
 
@@ -266,183 +443,37 @@ sequenceDiagram
     ChatHandler-->>Client: { "reply": "..." }
 ```
 
+---
+
+
 ### Swagger UI
 
 ```
 GET /docs
 ```
 
----
-
-## Example curl Request
-
-```bash
-curl -X POST http://localhost:8080/api/submit \
-  -H "Content-Type: application/json" \
-  -d '{
-    "locale": "en",
-    "submittedAt": "2026-03-01T10:30:00Z",
-    "step1": {
-      "confirmed": true
-    },
-    "step2": {
-      "firstName": "Jane",
-      "lastName": "Smith",
-      "dateOfBirth": "1990-04-22",
-      "nationality": "GB",
-      "idType": "passport",
-      "idNumber": "P9876543",
-      "street1": "10 Downing Street",
-      "city": "London",
-      "postalCode": "SW1A 2AA",
-      "country": "GB",
-      "phone": "+441234567890",
-      "email": "jane.smith@example.com"
-    },
-    "step3": {
-      "assetType": "stock",
-      "tickerSymbol": "TSLA",
-      "exchange": "NASDAQ",
-      "sharesOwned": "50"
-    },
-    "step4": {
-      "currency": "GBP",
-      "bankFields": {
-        "sort_code": "40-30-20",
-        "account_number": "12345678"
-      }
-    }
-  }'
-```
-
-Expected success response:
-```json
-{
-  "success": true,
-  "referenceNumber": "ACL-M5X2K1-AB3C",
-  "message": "Claim submitted successfully."
-}
-```
-
-Expected 422 response:
-```json
-{
-  "success": false,
-  "message": "Validation failed. Please review your submission.",
-  "errors": [
-    {
-      "field": "step2.email",
-      "code": "invalid_string",
-      "message": "Invalid email address."
-    }
-  ]
-}
-```
+Interactive API explorer — auto-generated from `claims-api.yaml`.
 
 ---
 
-## Full JSON Payload Examples
+## Claim Submission Details
 
-### Stock Claim (USD)
-```json
-{
-  "locale": "en",
-  "submittedAt": "2026-03-01T10:30:00Z",
-  "step1": { "confirmed": true },
-  "step2": {
-    "firstName": "John", "lastName": "Doe",
-    "dateOfBirth": "1985-06-15", "nationality": "US",
-    "idType": "passport", "idNumber": "A12345678",
-    "street1": "123 Main St", "city": "New York",
-    "postalCode": "10001", "country": "US",
-    "phone": "+12125551234", "email": "john@example.com"
-  },
-  "step3": {
-    "assetType": "stock",
-    "tickerSymbol": "AAPL",
-    "exchange": "NASDAQ",
-    "sharesOwned": "100"
-  },
-  "step4": {
-    "currency": "USD",
-    "bankFields": {
-      "account_number": "123456789",
-      "routing_number": "021000021"
-    }
-  }
-}
-```
+### step3 — Asset Type Discriminator
 
-### Crypto Claim (EUR)
-```json
-{
-  "locale": "de",
-  "submittedAt": "2026-03-01T10:30:00Z",
-  "step1": { "confirmed": true },
-  "step2": { "...": "same as above" },
-  "step3": {
-    "assetType": "crypto",
-    "cryptoExchange": "Coinbase",
-    "cryptoAccountId": "user@example.com",
-    "cryptoAssetSymbol": "BTC",
-    "cryptoAmount": "0.5"
-  },
-  "step4": {
-    "currency": "EUR",
-    "bankFields": {
-      "iban": "DE89370400440532013000",
-      "bic": "COBADEFFXXX"
-    }
-  }
-}
-```
+`assetType` selects the schema variant. Unknown values or missing required fields return `422`.
 
-### Bond Claim (JPY)
-```json
-{
-  "locale": "ja",
-  "submittedAt": "2026-03-01T10:30:00Z",
-  "step1": { "confirmed": true },
-  "step2": { "...": "..." },
-  "step3": {
-    "assetType": "bond",
-    "isin": "JP3633400001",
-    "faceValue": "1000000",
-    "maturityDate": "2030-12-31"
-  },
-  "step4": {
-    "currency": "JPY",
-    "bankFields": {
-      "bank_code": "0001",
-      "branch_code": "123",
-      "account_number": "1234567"
-    }
-  }
-}
-```
+| `assetType` | Required fields |
+|---|---|
+| `stock` | tickerSymbol, exchange, sharesOwned |
+| `etf` | tickerSymbol, exchange, sharesOwned |
+| `bond` | isin, faceValue, maturityDate |
+| `mutual_fund` | fundName, fundCode, unitsHeld |
+| `crypto` | cryptoExchange, cryptoAccountId, cryptoAssetSymbol, cryptoAmount |
+| `savings` | bankName, savingsAccountNumber, savingsBalance |
 
----
+### step4 — bankFields Validation
 
-## Discriminator Usage (step3)
-
-`step3` uses an OpenAPI 3.0 **discriminator** with `oneOf` to select the correct asset schema based on `assetType`:
-
-| `assetType` value | Schema | Required fields |
-|---|---|---|
-| `stock` | `StockAsset` | tickerSymbol, exchange, sharesOwned |
-| `etf` | `EtfAsset` | tickerSymbol, exchange, sharesOwned |
-| `bond` | `BondAsset` | isin, faceValue, maturityDate |
-| `mutual_fund` | `MutualFundAsset` | fundName, fundCode, unitsHeld |
-| `crypto` | `CryptoAsset` | cryptoExchange, cryptoAccountId, cryptoAssetSymbol, cryptoAmount |
-| `savings` | `SavingsAsset` | bankName, savingsAccountNumber, savingsBalance |
-
-Vert.x OpenAPI validates the discriminator automatically — unknown `assetType` values or missing required fields result in a `422` response.
-
----
-
-## bankFields Validation
-
-`step4.bankFields` is an open object (`additionalProperties: true`) in the OpenAPI spec because its required keys vary per currency. Server-side validation (`BankFieldsValidator.kt`) enforces the rules:
+`bankFields` is an open object in the OpenAPI spec; `BankFieldsValidator.kt` enforces currency-specific rules server-side.
 
 | Currency | Required fields | Format |
 |---|---|---|
@@ -459,6 +490,67 @@ Vert.x OpenAPI validates the discriminator automatically — unknown `assetType`
 
 ---
 
+## Multi-Language Support
+
+Validation error messages are locale-aware. Pass `"locale"` in the request body. Supported locales:
+
+`en` · `fr` · `es` · `de` · `pt` · `zh` · `ar` · `hi` · `bn` · `ur` · `ru`
+
+Message files live in `src/main/resources/messages/messages_{locale}.properties`.
+
+---
+
+## Example curl Requests
+
+### Submit a stock claim (GBP)
+
+```bash
+curl -X POST http://localhost:8080/api/submit \
+  -H "Content-Type: application/json" \
+  -d '{
+    "locale": "en",
+    "submittedAt": "2026-04-30T10:00:00Z",
+    "step1": { "confirmed": true },
+    "step2": {
+      "firstName": "Jane", "lastName": "Smith",
+      "dateOfBirth": "1990-04-22", "nationality": "GB",
+      "idType": "passport", "idNumber": "P9876543",
+      "street1": "10 Downing Street", "city": "London",
+      "postalCode": "SW1A 2AA", "country": "GB",
+      "phone": "+441234567890", "email": "jane.smith@example.com"
+    },
+    "step3": { "assetType": "stock", "tickerSymbol": "TSLA", "exchange": "NASDAQ", "sharesOwned": "50" },
+    "step4": { "currency": "GBP", "bankFields": { "sort_code": "40-30-20", "account_number": "12345678" } }
+  }'
+```
+
+### Inquire about a claim
+
+```bash
+curl -X POST http://localhost:8080/api/inquiry \
+  -H "Content-Type: application/json" \
+  -d '{ "referenceNumber": "ACL-M5X2K1-AB3C", "lastName": "Smith", "locale": "en" }'
+```
+
+### Upload a document
+
+```bash
+curl -X POST http://localhost:8080/api/documents/upload \
+  -F "file=@/path/to/passport.pdf" \
+  -F "referenceNumber=ACL-M5X2K1-AB3C" \
+  -F "documentType=passport"
+```
+
+### Chat with the assistant
+
+```bash
+curl -X POST http://localhost:8080/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{ "message": "Check the status of my claim ACL-M5X2K1-AB3C", "lastName": "Smith" }'
+```
+
+---
+
 ## Running Tests
 
 ```bash
@@ -468,7 +560,7 @@ Vert.x OpenAPI validates the discriminator automatically — unknown `assetType`
 # With output
 ./gradlew test --info
 
-# Specific test class
+# Specific class
 ./gradlew test --tests "com.example.claims.repository.BankFieldsValidatorTest"
 ```
 
@@ -476,16 +568,14 @@ Vert.x OpenAPI validates the discriminator automatically — unknown `assetType`
 
 ## Future Extensions
 
-1. **Authentication** — Add JWT validation via `vertx-auth-jwt` or OAuth2
-2. **Rate Limiting** — Use `vertx-redis-client` with a sliding window counter per IP/token
-3. **Couchbase Index** — Add secondary index on `referenceNumber` for efficient lookups:
+1. **Authentication** — JWT validation via `vertx-auth-jwt` or OAuth2
+2. **Rate Limiting** — sliding window counter per IP via `vertx-redis-client`
+3. **Secondary Index** — efficient claim lookups:
    ```sql
    CREATE INDEX idx_reference_number ON `claims`(referenceNumber);
    ```
-4. **Event streaming** — Publish submitted claims to Kafka/Pulsar for downstream processing
-5. **PII Encryption** — Encrypt `step2` (personal data) at rest using AWS KMS or Vault
-6. **Metrics** — Expose Prometheus metrics via `vertx-micrometer-metrics`
-7. **Tracing** — Integrate OpenTelemetry for distributed tracing
-8. **Multi-region** — Use Couchbase XDCR for cross-datacenter replication
-9. **API versioning** — Add `/v2/` prefix and maintain backward compatibility
-10. **Claim status polling** — Add `GET /api/claims/{referenceNumber}` endpoint
+4. **Event Streaming** — publish submitted claims to Kafka/Pulsar for downstream processing
+5. **PII Encryption** — encrypt `step2` personal data at rest using AWS KMS or Vault
+6. **Metrics** — Prometheus metrics via `vertx-micrometer-metrics`
+7. **Tracing** — OpenTelemetry distributed tracing
+8. **Multi-region** — Couchbase XDCR for cross-datacenter replication
